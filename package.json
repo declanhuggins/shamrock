@@ -1,0 +1,29 @@
+{
+  "name": "shamrock",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc && shx cp appsscript.json dist/appsscript.json",
+    "watch": "tsc --watch",
+    "push": "clasp push",
+    "push:watch": "clasp push --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/declanhuggins/shamrock.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/declanhuggins/shamrock/issues"
+  },
+  "homepage": "https://github.com/declanhuggins/shamrock#readme",
+  "devDependencies": {
+    "@types/google-apps-script": "^2.0.8",
+    "shx": "^0.4.0",
+    "typescript": "^5.9.3"
+  }
+}
