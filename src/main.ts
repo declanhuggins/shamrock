@@ -1,39 +1,88 @@
 
 function onOpen(): void {
   const ui = SpreadsheetApp.getUi();
-  const frontendMenu = ui
-    .createMenu("Frontend")
+  const setupMenu = ui
+    .createMenu("Setup")
+    .addItem("Quickstart: Backend + Forms", "shamrockQuickstart")
+    .addItem("Install Backend Tabs", "shamrockInstallBackendTabs")
+    .addItem("Create Cadet Intake Form", "shamrockCreateCadetForm")
+    .addItem("Create Attendance Form", "shamrockCreateAttendanceForm")
+    .addItem("Set Frontend Spreadsheet ID", "shamrockPromptFrontendId")
+    .addItem("Open Backend Spreadsheet", "shamrockOpenBackend");
+
+  const syncMenu = ui
+    .createMenu("Sync / Rebuild")
     .addItem("Full Sync (Backend → Public)", "shamrockSyncPublicViews")
+    .addSeparator()
     .addItem("Rebuild Directory", "shamrockRebuildDirectory")
     .addItem("Rebuild Attendance", "shamrockRebuildAttendance")
     .addItem("Rebuild Events", "shamrockRebuildEvents")
     .addItem("Rebuild Excusals", "shamrockRebuildExcusals")
     .addItem("Rebuild Audit", "shamrockRebuildAudit")
-    .addItem("Rebuild Data Legend", "shamrockRebuildDataLegend")
-    .addSeparator()
-    .addItem("Set Frontend Spreadsheet ID", "shamrockPromptFrontendId")
-    .addSeparator()
-    .addItem("Install Daily Sync Trigger", "shamrockInstallDailyTrigger")
+    .addItem("Rebuild Data Legend", "shamrockRebuildDataLegend");
+
+  const automationMenu = ui
+    .createMenu("Automation")
+    .addItem("Install Daily Sync Trigger (01:00)", "shamrockInstallDailyTrigger")
     .addItem("Remove Daily Sync Triggers", "shamrockRemoveDailyTrigger");
 
-  const backendMenu = ui
-    .createMenu("Backend")
-    .addItem("Create Cadet Intake Form", "shamrockCreateCadetForm")
-    .addItem("Simulate Cadet Intake (5)", "shamrockSimulateCadetIntake")
+  const utilitiesMenu = ui
+    .createMenu("Utilities")
     .addItem("Import Cadets CSV (Drive)", "shamrockPromptImportCadetsCsv")
-    .addItem("Install Backend Tabs", "shamrockInstallBackendTabs");
+    .addItem("Simulate Cadet Intake (5)", "shamrockSimulateCadetIntake")
+    .addItem("Seed Sample Events/Attendance", "shamrockSeedSampleData")
+    .addItem("Seed Full Dummy Dataset", "shamrockSeedFullDummyData")
+    .addItem("Run Health Check", "shamrockHealthCheck");
 
   ui
-    .createMenu("Admininstrator Menu")
-    .addSubMenu(frontendMenu)
-    .addSeparator()
-    .addSubMenu(backendMenu)
+    .createMenu("SHAMROCK Admin")
+    .addSubMenu(setupMenu)
+    .addSubMenu(syncMenu)
+    .addSubMenu(automationMenu)
+    .addSubMenu(utilitiesMenu)
     .addToUi();
+}
+
+function logInfo(action: string, message: string, meta?: Record<string, unknown>): void {
+  if (typeof Shamrock.logInfo === "function") {
+    Shamrock.logInfo(action, message, meta);
+    return;
+  }
+  try {
+    Logger.log(`[SHAMROCK] ${action}: ${message}`);
+  } catch (err) {
+    // ignore log failures
+  }
+}
+
+function logWarn(action: string, message: string, meta?: Record<string, unknown>): void {
+  if (typeof Shamrock.logWarn === "function") {
+    Shamrock.logWarn(action, message, meta);
+    return;
+  }
+  try {
+    Logger.log(`[SHAMROCK][WARN] ${action}: ${message}`);
+  } catch (err) {
+    // ignore log failures
+  }
+}
+
+function logError(action: string, message: string, meta?: Record<string, unknown>): void {
+  if (typeof Shamrock.logError === "function") {
+    Shamrock.logError(action, message, meta);
+    return;
+  }
+  try {
+    Logger.log(`[SHAMROCK][ERROR] ${action}: ${message}`);
+  } catch (err) {
+    // ignore log failures
+  }
 }
 
 const SHAMROCK_BACKEND_SPREADSHEET_ID = "SHAMROCK_BACKEND_SPREADSHEET_ID";
 const SHAMROCK_BACKEND_ID = SHAMROCK_BACKEND_SPREADSHEET_ID;
 const SHAMROCK_DIRECTORY_FORM_ID = "SHAMROCK_DIRECTORY_FORM_ID";
+const SHAMROCK_ATTENDANCE_FORM_ID = "SHAMROCK_ATTENDANCE_FORM_ID";
 
 function getBackendIdSafe(): string | null {
   if (typeof Shamrock.getBackendSpreadsheetIdSafe === "function") return Shamrock.getBackendSpreadsheetIdSafe();
@@ -53,41 +102,140 @@ function openBackendSpreadsheetSafe(): GoogleAppsScript.Spreadsheet.Spreadsheet 
 }
 
 function shamrockSyncPublicViews(): void {
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("syncAllPublicViews", () => {
+      Shamrock.ensureBackendSheets();
+      Shamrock.syncAllPublicViews();
+    });
+    return;
+  }
+  logInfo("syncAllPublicViews", "begin");
   Shamrock.ensureBackendSheets();
   Shamrock.syncAllPublicViews();
+  logInfo("syncAllPublicViews", "completed");
+}
+
+function shamrockQuickstart(): void {
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("quickstart", () => {
+      Shamrock.ensureBackendSheets();
+      logInfo("quickstart", "backend sheets ensured");
+      Shamrock.rebuildDataLegend();
+      logInfo("quickstart", "data legend rebuilt");
+      shamrockInstallBackendTabs();
+      logInfo("quickstart", "backend tabs installed");
+      shamrockCreateCadetForm();
+      logInfo("quickstart", "cadet form created");
+      shamrockCreateAttendanceForm();
+      logInfo("quickstart", "attendance form created");
+      Shamrock.syncAllPublicViews();
+      logInfo("quickstart", "completed backend install, forms, and sync");
+    });
+  } else {
+    logInfo("quickstart", "begin");
+    Shamrock.ensureBackendSheets();
+    logInfo("quickstart", "backend sheets ensured");
+    Shamrock.rebuildDataLegend();
+    logInfo("quickstart", "data legend rebuilt");
+    shamrockInstallBackendTabs();
+    logInfo("quickstart", "backend tabs installed");
+    shamrockCreateCadetForm();
+    logInfo("quickstart", "cadet form created");
+    shamrockCreateAttendanceForm();
+    logInfo("quickstart", "attendance form created");
+    Shamrock.syncAllPublicViews();
+    logInfo("quickstart", "completed backend install, forms, and sync");
+  }
+  const ui = SpreadsheetApp.getUi();
+  ui.alert("Quickstart complete", "Backend tabs, forms, and public views have been initialized. Verify the frontend ID and run a full sync if needed.", ui.ButtonSet.OK);
 }
 
 function shamrockRebuildDirectory(): void {
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuildDirectory", () => {
+      Shamrock.ensureBackendSheets();
+      Shamrock.rebuildDirectory();
+    });
+    return;
+  }
+  logInfo("rebuildDirectory", "begin");
   Shamrock.ensureBackendSheets();
   Shamrock.rebuildDirectory();
+  logInfo("rebuildDirectory", "completed");
 }
 
 function shamrockRebuildEvents(): void {
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuildEvents", () => {
+      Shamrock.ensureBackendSheets();
+      Shamrock.rebuildEvents();
+    });
+    return;
+  }
+  logInfo("rebuildEvents", "begin");
   Shamrock.ensureBackendSheets();
   Shamrock.rebuildEvents();
+  logInfo("rebuildEvents", "completed");
 }
 
 function shamrockRebuildAttendance(): void {
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuildAttendance", () => {
+      Shamrock.ensureBackendSheets();
+      Shamrock.rebuildAttendance();
+    });
+    return;
+  }
+  logInfo("rebuildAttendance", "begin");
   Shamrock.ensureBackendSheets();
   Shamrock.rebuildAttendance();
+  logInfo("rebuildAttendance", "completed");
 }
 
 function shamrockRebuildExcusals(): void {
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuildExcusals", () => {
+      Shamrock.ensureBackendSheets();
+      Shamrock.rebuildExcusals();
+    });
+    return;
+  }
+  logInfo("rebuildExcusals", "begin");
   Shamrock.ensureBackendSheets();
   Shamrock.rebuildExcusals();
+  logInfo("rebuildExcusals", "completed");
 }
 
 function shamrockRebuildAudit(): void {
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuildAudit", () => {
+      Shamrock.ensureBackendSheets();
+      Shamrock.rebuildAudit();
+    });
+    return;
+  }
+  logInfo("rebuildAudit", "begin");
   Shamrock.ensureBackendSheets();
   Shamrock.rebuildAudit();
+  logInfo("rebuildAudit", "completed");
 }
 
 function shamrockRebuildDataLegend(): void {
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuildDataLegend", () => {
+      Shamrock.ensureBackendSheets();
+      Shamrock.rebuildDataLegend();
+    });
+    return;
+  }
+  logInfo("rebuildDataLegend", "begin");
   Shamrock.ensureBackendSheets();
   Shamrock.rebuildDataLegend();
+  logInfo("rebuildDataLegend", "completed");
 }
 
 function shamrockPromptFrontendId(): void {
+  logInfo("setFrontendId", "prompting user for frontend spreadsheet id");
   const ui = SpreadsheetApp.getUi();
   const resp = ui.prompt("Set Frontend Spreadsheet ID", "Paste the Spreadsheet ID or URL for SHAMROCK — Frontend", ui.ButtonSet.OK_CANCEL);
   if (resp.getSelectedButton() !== ui.Button.OK) return;
@@ -95,9 +243,11 @@ function shamrockPromptFrontendId(): void {
   const id = extractSpreadsheetId(text);
   if (!id) {
     ui.alert("Invalid spreadsheet ID or URL");
+    logWarn("setFrontendId", "invalid input");
     return;
   }
   Shamrock.setFrontendSpreadsheetId(id);
+  logInfo("setFrontendId", `saved id ${id}`);
   ui.alert("Frontend spreadsheet ID saved.");
 }
 
@@ -107,12 +257,30 @@ function extractSpreadsheetId(idOrUrl: string): string | null {
 }
 
 function shamrockInstallDailyTrigger(): void {
+  logInfo("installDailyTrigger", "scheduling daily sync at 01:00");
   removeTriggersFor("shamrockSyncPublicViews");
   ScriptApp.newTrigger("shamrockSyncPublicViews").timeBased().everyDays(1).atHour(1).create();
+  logInfo("installDailyTrigger", "installed");
 }
 
 function shamrockRemoveDailyTrigger(): void {
+  logInfo("removeDailyTriggers", "removing all daily sync triggers");
   removeTriggersFor("shamrockSyncPublicViews");
+  logInfo("removeDailyTriggers", "removed");
+}
+
+function shamrockOpenBackend(): void {
+  const backend = openBackendSpreadsheetSafe();
+  const url = backend.getUrl();
+  const ui = SpreadsheetApp.getUi();
+  ui.alert("Backend", `Opening backend spreadsheet:\n${url}`, ui.ButtonSet.OK);
+  SpreadsheetApp.getActive().toast("Opening backend spreadsheet…", "SHAMROCK");
+  try {
+    SpreadsheetApp.flush();
+    SpreadsheetApp.getActive().getRange("A1").setNote("Backend opened: " + url);
+  } catch (err) {
+    // ignore toast side-effect
+  }
 }
 
 function removeTriggersFor(fnName: string): void {
@@ -124,6 +292,7 @@ function removeTriggersFor(fnName: string): void {
 }
 
 function shamrockPromptImportCadetsCsv(): void {
+  logInfo("importCadetsCsv", "prompt start");
   const ui = SpreadsheetApp.getUi();
   const resp = ui.prompt("Import Cadets CSV", "Paste a Drive file ID or URL for the cadet CSV.", ui.ButtonSet.OK_CANCEL);
   if (resp.getSelectedButton() !== ui.Button.OK) return;
@@ -132,11 +301,14 @@ function shamrockPromptImportCadetsCsv(): void {
     ui.alert("No file ID detected. Please try again.");
     return;
   }
+  logInfo("importCadetsCsv", `parsed id ${id}`);
   try {
     const imported = shamrockImportCadetsCsv(id);
     ui.alert(`Imported ${imported} cadets from CSV.`);
+    logInfo("importCadetsCsv", `success count=${imported}`);
   } catch (err) {
     ui.alert(`Import failed: ${err}`);
+    logInfo("importCadetsCsv", `failed: ${err}`);
   }
 }
 
@@ -274,7 +446,6 @@ function applyDirectoryBackendValidations(sheetName: string, sheet: GoogleAppsSc
     { col: 12, range: getDataLegendOptionRange(ss, "home_state_options"), values: getHomeStateOptions() },
     { col: 14, range: getDataLegendOptionRange(ss, "afsc_options"), values: getAfscOptions() },
     { col: 15, range: getDataLegendOptionRange(ss, "cip_broad_options"), values: getCipBroadOptions() },
-    { col: 16, values: getCipCodeOptions() },
     { col: 17, range: getDataLegendOptionRange(ss, "flight_path_status_options"), values: getFlightPathStatusOptions() },
     { col: 18, range: getDataLegendOptionRange(ss, "status_options"), values: getStatusOptions() },
   ];
@@ -328,16 +499,39 @@ function shamrockOnCadetFormSubmit(e: any): void {
   Shamrock.onFormSubmit(e);
 }
 
+function shamrockOnAttendanceFormSubmit(e: any): void {
+  Shamrock.onFormSubmit(e);
+}
+
 const CADET_FORM_CONFIRMATION_MESSAGE =
   "Your response has been recorded. You can edit your information at any time by either editing the form sent to your email, or filling out the form again.";
 
+const ATTENDANCE_FORM_CONFIRMATION_MESSAGE =
+  "Thanks for submitting attendance. Remember to select yourself and verify the Training Week and Event before submitting.";
+
 function applyCadetFormPolicies(form: GoogleAppsScript.Forms.Form): void {
-  form
-    .setCollectEmail(true)
-    .setRequireLogin(true)
-    .setAllowResponseEdits(true)
-    .setShowLinkToRespondAgain(false)
-    .setConfirmationMessage(CADET_FORM_CONFIRMATION_MESSAGE);
+  safeFormPolicy(form, "setCollectEmail", () => form.setCollectEmail(true));
+  safeFormPolicy(form, "setRequireLogin", () => form.setRequireLogin(true));
+  safeFormPolicy(form, "setAllowResponseEdits", () => form.setAllowResponseEdits(true));
+  safeFormPolicy(form, "setShowLinkToRespondAgain", () => form.setShowLinkToRespondAgain(false));
+  safeFormPolicy(form, "setConfirmationMessage", () => form.setConfirmationMessage(CADET_FORM_CONFIRMATION_MESSAGE));
+}
+
+function applyAttendanceFormPolicies(form: GoogleAppsScript.Forms.Form): void {
+  safeFormPolicy(form, "setCollectEmail", () => form.setCollectEmail(true));
+  safeFormPolicy(form, "setRequireLogin", () => form.setRequireLogin(true));
+  safeFormPolicy(form, "setAllowResponseEdits", () => form.setAllowResponseEdits(true));
+  safeFormPolicy(form, "setShowLinkToRespondAgain", () => form.setShowLinkToRespondAgain(false));
+  safeFormPolicy(form, "setConfirmationMessage", () => form.setConfirmationMessage(ATTENDANCE_FORM_CONFIRMATION_MESSAGE));
+}
+
+function safeFormPolicy(form: GoogleAppsScript.Forms.Form, label: string, fn: () => void): void {
+  try {
+    fn();
+    logInfo("formPolicy", `${label} ok`);
+  } catch (err) {
+    logWarn("formPolicy", `${label} skipped: ${err}`);
+  }
 }
 
 function ensureCadetForm(): { form: GoogleAppsScript.Forms.Form; backend: GoogleAppsScript.Spreadsheet.Spreadsheet; responsesSheet: GoogleAppsScript.Spreadsheet.Sheet | null } {
@@ -346,6 +540,7 @@ function ensureCadetForm(): { form: GoogleAppsScript.Forms.Form; backend: Google
   const desiredTitle = "SHAMROCK Cadet Directory Intake";
 
   let form: GoogleAppsScript.Forms.Form | null = openStoredCadetForm();
+  logInfo("ensureCadetForm", form ? "opened stored form id" : "no stored form id found");
 
   // Start with likely candidates so we preserve an existing form when possible
   const candidateSheets = [
@@ -372,10 +567,12 @@ function ensureCadetForm(): { form: GoogleAppsScript.Forms.Form; backend: Google
   }
 
   if (!form) {
-    form = FormApp.create(desiredTitle).setDescription("Use this form to add or update cadet directory information. Primary key: university email.");
+    logInfo("ensureCadetForm", "creating new form");
+    form = FormApp.create(desiredTitle).setDescription("Use this form to add or update cadet directory information. Primary key: email.");
   }
 
   applyCadetFormPolicies(form);
+  logInfo("ensureCadetForm", "applied form policies");
 
   const alreadyTargetingBackend = (() => {
     try {
@@ -387,6 +584,7 @@ function ensureCadetForm(): { form: GoogleAppsScript.Forms.Form; backend: Google
 
   // Ensure the form is pointing at the backend and locate the exact linked responses sheet
   if (!alreadyTargetingBackend) {
+    logInfo("ensureCadetForm", "retargeting form destination to backend");
     form.setDestination(FormApp.DestinationType.SPREADSHEET, backendId || backend.getId());
   }
 
@@ -398,6 +596,71 @@ function ensureCadetForm(): { form: GoogleAppsScript.Forms.Form; backend: Google
 
   responsesSheet = ensureResponseSheetName(backend, responsesSheet, "Cadet Form Responses");
   persistCadetFormId(form);
+  logInfo("ensureCadetForm", "responses sheet named and form id persisted");
+
+  return { form, backend, responsesSheet: responsesSheet || null };
+}
+
+function ensureAttendanceForm(): { form: GoogleAppsScript.Forms.Form; backend: GoogleAppsScript.Spreadsheet.Spreadsheet; responsesSheet: GoogleAppsScript.Spreadsheet.Sheet | null } {
+  const backendId = getBackendIdSafe();
+  const backend = openBackendSpreadsheetSafe();
+  const desiredTitle = "SHAMROCK Attendance Form";
+
+  let form: GoogleAppsScript.Forms.Form | null = openStoredAttendanceForm();
+  logInfo("ensureAttendanceForm", form ? "opened stored form id" : "no stored form id found");
+
+  const candidateSheets = [
+    backend.getSheetByName("Attendance Form Responses"),
+    backend.getSheetByName("Form Responses 1"),
+    backend.getSheetByName("Form Responses"),
+  ].filter((s): s is GoogleAppsScript.Spreadsheet.Sheet => Boolean(s));
+
+  let formUrl: string | null = null;
+  if (!form) {
+    for (const sheet of candidateSheets) {
+      try {
+        if (sheet.getFormUrl && sheet.getFormUrl()) {
+          formUrl = sheet.getFormUrl();
+          break;
+        }
+      } catch (err) {
+        formUrl = null;
+      }
+    }
+    if (formUrl) {
+      form = FormApp.openByUrl(formUrl);
+    }
+  }
+
+  if (!form) {
+    logInfo("ensureAttendanceForm", "creating new form");
+    form = FormApp.create(desiredTitle).setDescription("Bulk attendance capture for SHAMROCK events.");
+  }
+
+  applyAttendanceFormPolicies(form);
+  logInfo("ensureAttendanceForm", "applied form policies");
+
+  const alreadyTargetingBackend = (() => {
+    try {
+      return form.getDestinationType() === FormApp.DestinationType.SPREADSHEET && form.getDestinationId() === (backendId || backend.getId());
+    } catch (err) {
+      return false;
+    }
+  })();
+
+  if (!alreadyTargetingBackend) {
+    logInfo("ensureAttendanceForm", "retargeting form destination to backend");
+    form.setDestination(FormApp.DestinationType.SPREADSHEET, backendId || backend.getId());
+  }
+
+  let responsesSheet = findResponseSheetForForm(backend, form) || getNewestFormResponseSheet(backend);
+  if (!responsesSheet) {
+    responsesSheet = backend.getSheets().find(s => s.getFormUrl && s.getFormUrl()) || null;
+  }
+
+  responsesSheet = ensureResponseSheetName(backend, responsesSheet, "Attendance Form Responses");
+  persistAttendanceFormId(form);
+  logInfo("ensureAttendanceForm", "responses sheet named and form id persisted");
 
   return { form, backend, responsesSheet: responsesSheet || null };
 }
@@ -423,6 +686,7 @@ function updateDirectoryFormLink(url: string): void {
 }
 
 function normalizeFormResponseSheet(sheet: GoogleAppsScript.Spreadsheet.Sheet, headers?: string[]): void {
+  logInfo("normalizeFormResponseSheet", `sheet=${sheet.getName()} start`);
   const expectedHuman = headers && headers.length ? headers : null;
   const machineHeaders = getCadetFormMachineHeaders();
   const targetCols = machineHeaders.length;
@@ -485,6 +749,7 @@ function normalizeFormResponseSheet(sheet: GoogleAppsScript.Spreadsheet.Sheet, h
   // Keep machine headers out of view and freeze both header rows for clarity
   sheet.hideRows(1);
   sheet.setFrozenRows(2);
+  logInfo("normalizeFormResponseSheet", `sheet=${sheet.getName()} done`);
 }
 
 function getCadetFormHeaders(): string[] {
@@ -529,10 +794,6 @@ function getDormOptions(): string[] {
 
 function getCipBroadOptions(): string[] {
   return Shamrock.DATA_LEGEND_OPTIONS.cip_broad_options;
-}
-
-function getCipCodeOptions(): string[] {
-  return Shamrock.DATA_LEGEND_OPTIONS.cip_code_options;
 }
 
 function getAfscOptions(): string[] {
@@ -599,11 +860,32 @@ function openStoredCadetForm(): GoogleAppsScript.Forms.Form | null {
   }
 }
 
+function openStoredAttendanceForm(): GoogleAppsScript.Forms.Form | null {
+  try {
+    const id = PropertiesService.getScriptProperties().getProperty(SHAMROCK_ATTENDANCE_FORM_ID);
+    if (!id) return null;
+    return FormApp.openById(id);
+  } catch (err) {
+    return null;
+  }
+}
+
 function persistCadetFormId(form: GoogleAppsScript.Forms.Form): void {
   try {
     const id = form.getId();
     if (id) {
       PropertiesService.getScriptProperties().setProperty(SHAMROCK_DIRECTORY_FORM_ID, id);
+    }
+  } catch (err) {
+    // ignore persistence failures
+  }
+}
+
+function persistAttendanceFormId(form: GoogleAppsScript.Forms.Form): void {
+  try {
+    const id = form.getId();
+    if (id) {
+      PropertiesService.getScriptProperties().setProperty(SHAMROCK_ATTENDANCE_FORM_ID, id);
     }
   } catch (err) {
     // ignore persistence failures
@@ -623,7 +905,54 @@ function getNewestFormResponseSheet(backend: GoogleAppsScript.Spreadsheet.Spread
   return formSheets[formSheets.length - 1];
 }
 
+function listActiveCadets(): any[] {
+  const cadets = Shamrock.listCadets();
+  return cadets.filter((c: any) => {
+    const status = String((c as any).status || "").toLowerCase();
+    return status === "active" || status === "";
+  });
+}
+
+function formatCadetChoices(cadets: any[]): string[] {
+  const sorted = [...cadets].sort((a, b) => {
+    const la = String((a as any).last_name || "").toLowerCase();
+    const lb = String((b as any).last_name || "").toLowerCase();
+    if (la !== lb) return la < lb ? -1 : 1;
+    const fa = String((a as any).first_name || "").toLowerCase();
+    const fb = String((b as any).first_name || "").toLowerCase();
+    return fa < fb ? -1 : fa > fb ? 1 : 0;
+  });
+  return sorted.map(c => {
+    const last = (c as any).last_name || "";
+    const first = (c as any).first_name || "";
+    return `${last} ${first}`.trim();
+  });
+}
+
+function groupCadetsByFlight(cadets: any[], orderedFlights: string[]): Map<string, any[]> {
+  const map = new Map<string, any[]>();
+  orderedFlights.forEach(f => map.set(f, []));
+  map.set("Unassigned", []);
+  cadets.forEach((c: any) => {
+    const flight = (c as any).flight || "";
+    const target = orderedFlights.find(f => f.toLowerCase() === String(flight || "").toLowerCase()) || "Unassigned";
+    const list = map.get(target) || [];
+    list.push(c);
+    map.set(target, list);
+  });
+  return map;
+}
+
+function isCrossTownCadet(cadet: any): boolean {
+  const dorm = String((cadet as any).dorm || "").toLowerCase();
+  const uni = String((cadet as any).university || "").toLowerCase();
+  if (dorm.includes("cross")) return true;
+  if (uni && uni !== "notre dame") return true;
+  return false;
+}
+
 function shamrockCreateCadetForm(): void {
+  logInfo("createCadetForm", "begin");
   const setup = ensureCadetForm();
   const form = setup.form;
   const backend = setup.backend;
@@ -635,6 +964,7 @@ function shamrockCreateCadetForm(): void {
   applyCadetFormPolicies(form);
 
   // Refresh questions (idempotent update)
+  logInfo("createCadetForm", "clearing existing items");
   form.getItems().forEach(item => form.deleteItem(item));
   const emailValidation = FormApp.createTextValidation().requireTextIsEmail().build();
   const phoneValidation = FormApp.createTextValidation().requireTextMatchesPattern("^\\d{10}$").setHelpText("Enter 10 digits, numbers only").build();
@@ -661,7 +991,8 @@ function shamrockCreateCadetForm(): void {
     .setChoiceValues(getDormOptions())
     .setRequired(false)
     .setHelpText("Answer \"Off-Campus\" or \"Cross-Town\" if not applicable.");
-  form.addTextItem().setTitle("University Email").setRequired(true).setValidation(emailValidation);
+  // Keep a visible email field as a fallback, but collect verified email via Google Forms settings
+  form.addTextItem().setTitle("Email").setRequired(false).setValidation(emailValidation).setHelpText("Captured automatically; only use if different.");
   form.addTextItem().setTitle("Phone").setValidation(phoneValidation).setHelpText("Type your 10 digit phone number without any other characters.");
   form.addTextItem().setTitle("Home Town");
   form.addListItem().setTitle("Home State").setChoiceValues(getHomeStateOptions());
@@ -681,6 +1012,7 @@ function shamrockCreateCadetForm(): void {
 
   const linkedSheet = setup.responsesSheet;
   if (linkedSheet) {
+    logInfo("createCadetForm", "normalizing response sheet headers");
     normalizeFormResponseSheet(linkedSheet, getCadetFormHeaders());
   }
 
@@ -689,8 +1021,98 @@ function shamrockCreateCadetForm(): void {
 
   const url = form.getPublishedUrl();
   updateDirectoryFormLink(url);
+  logInfo("createCadetForm", "published url set and dashboard link updated");
   const ui = SpreadsheetApp.getUi();
   ui.alert("Cadet Intake Form ready", "Quick link updated on Dashboard (Directory Form).", ui.ButtonSet.OK);
+}
+
+function shamrockCreateAttendanceForm(): void {
+  logInfo("createAttendanceForm", "begin");
+  const setup = ensureAttendanceForm();
+  const form = setup.form;
+  const backend = setup.backend;
+
+  form.setTitle("SHAMROCK Attendance Form");
+  form.setDescription(
+    "Bulk attendance capture for Mando, LLAB, and Secondary events. Select yourself, confirm the Training Week (TW-00), and choose the correct event type. Use the flight section for Mando/LLAB and the Secondary section for any secondary event."
+  );
+  applyAttendanceFormPolicies(form);
+
+  logInfo("createAttendanceForm", "clearing existing items");
+  form.getItems().forEach(item => form.deleteItem(item));
+
+  // Page 1: metadata
+  form.addTextItem().setTitle("Name").setRequired(true).setHelpText("Format: Last, First. Make sure you also check your own name below.");
+  form.addTextItem().setTitle("Training Week (Format as TW-00)").setRequired(true).setHelpText("Example: TW-06 (use current week of year minus 34).");
+  form
+    .addMultipleChoiceItem()
+    .setTitle("Event")
+    .setChoiceValues(["Mando", "LLAB", "Secondary"])
+    .setRequired(true)
+    .setHelpText("Pick the event type you are reporting attendance for.");
+  form
+    .addListItem()
+    .setTitle("Flight")
+    .setChoiceValues(getFlightOptions())
+    .setRequired(true)
+    .setHelpText("Select your flight. Cross-town cadets: choose your assigned flight for LLAB; use the Cross-Town list for Mando.");
+
+  // Page 2: Mando/LLAB flight attendance
+  form.addPageBreakItem().setTitle("Flight Attendance (Mando / LLAB)").setHelpText("Check everyone present for Mando or LLAB, including yourself. Use the Cross-Town list for Mando PT only.");
+
+  const cadets = listActiveCadets();
+  logInfo("createAttendanceForm", `active cadets loaded: ${cadets.length}`);
+  const flights = getFlightOptions();
+  const byFlight = groupCadetsByFlight(cadets, flights);
+  const crossTown = cadets.filter(isCrossTownCadet);
+
+  flights.forEach(flight => {
+    const roster = byFlight.get(flight) || [];
+    if (!roster.length) return;
+    form
+      .addCheckboxItem()
+      .setTitle(`${flight} Flight Attendance`)
+      .setChoiceValues(formatCadetChoices(roster))
+      .setHelpText("Select everyone present from this flight.");
+  });
+
+  if (crossTown.length) {
+    form
+      .addCheckboxItem()
+      .setTitle("Cross-Town Cadets (Mando PT)")
+      .setChoiceValues(formatCadetChoices(crossTown))
+      .setHelpText("Use this only for Mando PT sessions where Cross-Town cadets form a separate element.");
+  }
+
+  // Page 3: Secondary attendance (all cadets may attend)
+  form
+    .addPageBreakItem()
+    .setTitle("Secondary Attendance")
+    .setHelpText("Secondary events may include any cadet. Select all cadets present.");
+
+  flights.forEach(flight => {
+    const roster = byFlight.get(flight) || [];
+    if (!roster.length) return;
+    form
+      .addCheckboxItem()
+      .setTitle(`Secondary – ${flight} Flight`)
+      .setChoiceValues(formatCadetChoices(roster))
+      .setHelpText("Select everyone from this flight who attended the secondary event.");
+  });
+
+  const responseSheet = setup.responsesSheet;
+  if (responseSheet) {
+    ensureResponseSheetName(backend, responseSheet, "Attendance Form Responses");
+  }
+
+  removeTriggersFor("shamrockOnAttendanceFormSubmit");
+  ScriptApp.newTrigger("shamrockOnAttendanceFormSubmit").forSpreadsheet(backend).onFormSubmit().create();
+
+  persistAttendanceFormId(form);
+  logInfo("createAttendanceForm", "trigger installed and form id persisted");
+
+  const ui = SpreadsheetApp.getUi();
+  ui.alert("Attendance Form ready", "Use the linked form to collect bulk attendance. The on-submit trigger was installed.", ui.ButtonSet.OK);
 }
 
 function shamrockSimulateCadetIntake(): void {
@@ -721,7 +1143,7 @@ function shamrockSimulateCadetIntake(): void {
         response.withItemResponse((item as any).asTextItem().createResponse(value));
       }
     };
-    set("University Email", sample.email);
+    set("Email", sample.email);
     set("Last Name", sample.last);
     set("First Name", sample.first);
     set("AS Year", sample.as_year);
@@ -740,14 +1162,375 @@ function shamrockSimulateCadetIntake(): void {
   });
 }
 
+function shamrockSeedSampleData(): void {
+  Shamrock.withLock(() => {
+    Shamrock.ensureBackendSheets();
+
+    const events = [
+      {
+        event_id: "2026S-TW01-LLAB",
+        event_name: "LLAB Kickoff",
+        event_type: "LLAB",
+        training_week: "TW-01",
+        event_date: "2026-01-15 15:00",
+        event_status: "Published",
+        affects_attendance: true,
+        attendance_label: "TW-01 LLAB",
+        expected_group: "All Cadets",
+        flight_scope: "All",
+        location: "Jordan Hall",
+        notes: "Seeded sample LLAB",
+        created_at: Shamrock.nowIso(),
+        updated_at: Shamrock.nowIso(),
+      },
+      {
+        event_id: "2026S-TW01-MANDO",
+        event_name: "Mando PT",
+        event_type: "Mando",
+        training_week: "TW-01",
+        event_date: "2026-01-16 06:00",
+        event_status: "Published",
+        affects_attendance: true,
+        attendance_label: "TW-01 Mando",
+        expected_group: "All Cadets",
+        flight_scope: "All",
+        location: "Rockne",
+        notes: "Seeded sample PT",
+        created_at: Shamrock.nowIso(),
+        updated_at: Shamrock.nowIso(),
+      },
+      {
+        event_id: "2026S-TW02-MANDO",
+        event_name: "Mando PT (Wx Cancelled)",
+        event_type: "Mando",
+        training_week: "TW-02",
+        event_date: "2026-01-23 06:00",
+        event_status: "Cancelled",
+        affects_attendance: true,
+        attendance_label: "TW-02 Mando",
+        expected_group: "All Cadets",
+        flight_scope: "All",
+        location: "Rockne",
+        notes: "Cancelled for weather",
+        created_at: Shamrock.nowIso(),
+        updated_at: Shamrock.nowIso(),
+      },
+    ];
+
+    events.forEach(ev => {
+      Shamrock.upsertEvent(ev as any);
+      Shamrock.logAudit({
+        action: "events.upsert",
+        target_table: "Events Backend",
+        target_key: ev.event_id,
+        new_value: JSON.stringify(ev),
+        source: "seed",
+      });
+    });
+
+    const cadets = Shamrock.listCadets();
+    if (!cadets.length) return;
+    const targets = cadets.slice(0, Math.min(6, cadets.length));
+
+    const attendanceSeeds = [
+      { event_id: "2026S-TW01-LLAB", codes: ["P", "P", "P", "E", "ER", "T"] },
+      { event_id: "2026S-TW01-MANDO", codes: ["P", "P", "E", "P", "MU", "P"] },
+      { event_id: "2026S-TW02-MANDO", codes: ["N/A", "N/A", "N/A", "N/A", "N/A", "N/A"] },
+    ];
+
+    targets.forEach((cadet: any, idx: number) => {
+      attendanceSeeds.forEach(seed => {
+        const code = seed.codes[idx] || "P";
+        Shamrock.setAttendance({
+          cadet_email: cadet.cadet_email,
+          event_id: seed.event_id,
+          attendance_code: code,
+          source: "seed",
+          updated_at: Shamrock.nowIso(),
+        } as any);
+        Shamrock.logAudit({
+          action: "attendance.set_code",
+          target_table: "Attendance Backend",
+          target_key: `${cadet.cadet_email}|${seed.event_id}`,
+          event_id: seed.event_id,
+          new_value: code,
+          source: "seed",
+        });
+      });
+    });
+
+    const excusalCadet = targets[1];
+    if (excusalCadet) {
+      const excusalId = `EXC-${Utilities.getUuid()}`;
+      const excusal = {
+        excusal_id: excusalId,
+        cadet_email: excusalCadet.cadet_email,
+        event_id: "2026S-TW01-LLAB",
+        request_timestamp: Shamrock.nowIso(),
+        reason: "Travel conflict (seed)",
+        decision: "Approved",
+        decision_by: "cadre@example.edu",
+        decision_timestamp: Shamrock.nowIso(),
+        attendance_effect: "Set E",
+        source: "seed",
+      } as any;
+      Shamrock.appendExcusal(excusal);
+      Shamrock.setAttendance({
+        cadet_email: excusalCadet.cadet_email,
+        event_id: excusal.event_id,
+        attendance_code: "E",
+        source: "seed",
+        updated_at: Shamrock.nowIso(),
+      } as any);
+      Shamrock.logAudit({
+        action: "excusals.submit",
+        target_table: "Excusals Backend",
+        target_key: excusalId,
+        new_value: JSON.stringify(excusal),
+        source: "seed",
+      });
+      Shamrock.logAudit({
+        action: "attendance.set_code",
+        target_table: "Attendance Backend",
+        target_key: `${excusalCadet.cadet_email}|${excusal.event_id}`,
+        event_id: excusal.event_id,
+        new_value: "E",
+        source: "seed",
+      });
+    }
+
+    try {
+      Shamrock.syncAllPublicViews();
+    } catch (err) {
+      // Frontend not configured; skip sync
+    }
+  });
+
+  const ui = SpreadsheetApp.getUi();
+  ui.alert("Sample data seeded", "Events, attendance, and one excusal were seeded. Run a public sync if needed.", ui.ButtonSet.OK);
+}
+
+function shamrockSeedFullDummyData(): void {
+  Shamrock.withLock(() => {
+    Shamrock.ensureBackendSheets();
+    const runId = `seed-${Utilities.getUuid().slice(0, 8)}`;
+    const now = Shamrock.nowIso();
+
+    const cadets = [
+      { last_name: "Smith", first_name: "Alex", as_year: "AS100", graduation_year: "2029", flight: "Alpha", squadron: "Blue", university: "Notre Dame", cadet_email: "alex.smith@example.edu", phone: "555-1001", dorm: "Alumni Hall", home_town: "South Bend", home_state: "Indiana", dob: "2007-02-11", cip_broad: "14 - Engineering", cip_code: "14.0101", afsc: "11X - Pilot", flight_path_status: "Participating 1/4", status: "Active", photo_url: "", notes: "", created_at: now, updated_at: now },
+      { last_name: "Johnson", first_name: "Bailey", as_year: "AS150", graduation_year: "2029", flight: "Bravo", squadron: "Gold", university: "Notre Dame", cadet_email: "bailey.johnson@example.edu", phone: "555-1002", dorm: "Dillon Hall", home_town: "Carmel", home_state: "Indiana", dob: "2007-05-22", cip_broad: "26 - Biological and Biomedical Sciences", cip_code: "26.0202", afsc: "17D - Warfighter Communications", flight_path_status: "Participating 1/4", status: "Active", photo_url: "", notes: "", created_at: now, updated_at: now },
+      { last_name: "Williams", first_name: "Casey", as_year: "AS200", graduation_year: "2028", flight: "Charlie", squadron: "Blue", university: "St. Mary's", cadet_email: "casey.williams@example.edu", phone: "555-1003", dorm: "Off-Campus", home_town: "Chicago", home_state: "Illinois", dob: "2006-08-03", cip_broad: "52 - Business, Management, Marketing", cip_code: "52.0101", afsc: "17S - Cyberspace Effects", flight_path_status: "Enrolled 2/4", status: "Active", photo_url: "", notes: "", created_at: now, updated_at: now },
+      { last_name: "Brown", first_name: "Drew", as_year: "AS250", graduation_year: "2028", flight: "Delta", squadron: "Gold", university: "Holy Cross", cadet_email: "drew.brown@example.edu", phone: "555-1004", dorm: "Cross-Town", home_town: "Detroit", home_state: "Michigan", dob: "2006-12-14", cip_broad: "11 - Computer and Information Sciences", cip_code: "11.0701", afsc: "62E - Developmental Engineer", flight_path_status: "Enrolled 2/4", status: "Active", photo_url: "", notes: "", created_at: now, updated_at: now },
+      { last_name: "Davis", first_name: "Emery", as_year: "AS300", graduation_year: "2027", flight: "Echo", squadron: "Blue", university: "Notre Dame", cadet_email: "emery.davis@example.edu", phone: "555-1005", dorm: "Dunne Hall", home_town: "Phoenix", home_state: "Arizona", dob: "2005-03-30", cip_broad: "14 - Engineering", cip_code: "14.0901", afsc: "12X - Combat Systems Officer", flight_path_status: "Active 3/4", status: "Active", photo_url: "", notes: "", created_at: now, updated_at: now },
+      { last_name: "Miller", first_name: "Finley", as_year: "AS400", graduation_year: "2026", flight: "Foxtrot", squadron: "Gold", university: "Valparaiso", cadet_email: "finley.miller@example.edu", phone: "555-1006", dorm: "Cross-Town", home_town: "Valparaiso", home_state: "Indiana", dob: "2004-09-18", cip_broad: "45 - Social Sciences", cip_code: "45.1001", afsc: "38F - Force Support", flight_path_status: "Ready 4/4", status: "Active", photo_url: "", notes: "", created_at: now, updated_at: now },
+      { last_name: "Garcia", first_name: "Hayden", as_year: "AS500", graduation_year: "2025", flight: "Alpha", squadron: "Blue", university: "Notre Dame", cadet_email: "hayden.garcia@example.edu", phone: "555-1007", dorm: "Keenan Hall", home_town: "Denver", home_state: "Colorado", dob: "2003-01-12", cip_broad: "40 - Physical Sciences", cip_code: "40.0801", afsc: "31P - Security Forces", flight_path_status: "Ready 4/4", status: "Leave", photo_url: "", notes: "PCSM waiver pending", created_at: now, updated_at: now },
+      { last_name: "Lee", first_name: "Jordan", as_year: "AS600", graduation_year: "2024", flight: "Bravo", squadron: "Gold", university: "Notre Dame", cadet_email: "jordan.lee@example.edu", phone: "555-1008", dorm: "Siegfried Hall", home_town: "Seattle", home_state: "Washington", dob: "2002-11-07", cip_broad: "52 - Business, Management, Marketing", cip_code: "52.0801", afsc: "15W - Weather", flight_path_status: "Ready 4/4", status: "Alumni", photo_url: "", notes: "Commissioned May 2024", created_at: now, updated_at: now },
+    ];
+
+    cadets.forEach(record => {
+      Shamrock.upsertCadet(record as any);
+      Shamrock.logAudit({
+        action: "directory.upsert",
+        target_table: "Directory Backend",
+        target_key: record.cadet_email,
+        new_value: JSON.stringify(record),
+        source: "seed",
+        run_id: runId,
+      });
+    });
+
+    const events = [
+      { event_id: "2026S-TW01-LLAB", event_name: "LLAB Kickoff", event_type: "LLAB", training_week: "TW-01", event_date: "2026-01-15 15:00", event_status: "Published", affects_attendance: true, attendance_label: "TW-01 LLAB", expected_group: "All Cadets", flight_scope: "All", location: "Jordan Hall", notes: "Seeded event", created_at: now, updated_at: now },
+      { event_id: "2026S-TW01-MANDO", event_name: "Mando PT", event_type: "Mando", training_week: "TW-01", event_date: "2026-01-16 06:00", event_status: "Published", affects_attendance: true, attendance_label: "TW-01 Mando", expected_group: "All Cadets", flight_scope: "All", location: "Rockne", notes: "", created_at: now, updated_at: now },
+      { event_id: "2026S-TW01-SEC", event_name: "Leadership Seminar", event_type: "Secondary", training_week: "TW-01", event_date: "2026-01-17 19:00", event_status: "Draft", affects_attendance: false, attendance_label: "TW-01 Secondary", expected_group: "Optional", flight_scope: "All", location: "Hesburgh", notes: "Not tracked in attendance", created_at: now, updated_at: now },
+      { event_id: "2026S-TW02-LLAB", event_name: "LLAB Mission Planning", event_type: "LLAB", training_week: "TW-02", event_date: "2026-01-22 15:00", event_status: "Published", affects_attendance: true, attendance_label: "TW-02 LLAB", expected_group: "All Cadets", flight_scope: "All", location: "Debartolo", notes: "", created_at: now, updated_at: now },
+      { event_id: "2026S-TW02-MANDO", event_name: "Mando PT", event_type: "Mando", training_week: "TW-02", event_date: "2026-01-23 06:00", event_status: "Cancelled", affects_attendance: true, attendance_label: "TW-02 Mando", expected_group: "All Cadets", flight_scope: "All", location: "Rockne", notes: "Weather cancellation", created_at: now, updated_at: now },
+      { event_id: "2026S-TW03-LLAB", event_name: "LLAB FTX", event_type: "LLAB", training_week: "TW-03", event_date: "2026-01-29 14:00", event_status: "Archived", affects_attendance: true, attendance_label: "TW-03 LLAB", expected_group: "All Cadets", flight_scope: "All", location: "White Field", notes: "Prior term archived sample", created_at: now, updated_at: now },
+    ];
+
+    events.forEach(ev => {
+      Shamrock.upsertEvent(ev as any);
+      Shamrock.logAudit({
+        action: "events.upsert",
+        target_table: "Events Backend",
+        target_key: ev.event_id,
+        new_value: JSON.stringify(ev),
+        source: "seed",
+        run_id: runId,
+      });
+    });
+
+    const seededCadets = Shamrock.listCadets();
+    const attendanceSeeds = [
+      { event_id: "2026S-TW01-LLAB", codes: ["P", "P", "T", "E", "ER", "ED", "MU", "MRS"] },
+      { event_id: "2026S-TW01-MANDO", codes: ["P", "P", "P", "P", "MU", "P", "E", "T"] },
+      { event_id: "2026S-TW02-LLAB", codes: ["P", "T", "P", "E", "ER", "P", "E", "U"] },
+      { event_id: "2026S-TW02-MANDO", codes: ["N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"] },
+      { event_id: "2026S-TW03-LLAB", codes: ["P", "E", "P", "P", "MU", "P", "ES", "ED"] },
+    ];
+
+    attendanceSeeds.forEach(seed => {
+      seededCadets.forEach((cadet: any, idx: number) => {
+        const code = seed.codes[idx % seed.codes.length] || "P";
+        Shamrock.setAttendance({
+          cadet_email: cadet.cadet_email,
+          event_id: seed.event_id,
+          attendance_code: code,
+          source: "seed",
+          updated_at: Shamrock.nowIso(),
+        } as any);
+        Shamrock.logAudit({
+          action: "attendance.set_code",
+          target_table: "Attendance Backend",
+          target_key: `${cadet.cadet_email}|${seed.event_id}`,
+          event_id: seed.event_id,
+          new_value: code,
+          source: "seed",
+          run_id: runId,
+        });
+      });
+    });
+
+    const excusals = [
+      { excusal_id: "EXC-SEED-01", cadet_email: seededCadets[1]?.cadet_email || "", event_id: "2026S-TW01-LLAB", request_timestamp: now, reason: "Exam conflict", decision: "Approved", decision_by: "cadre@example.edu", decision_timestamp: now, attendance_effect: "Set E", source: "seed" },
+      { excusal_id: "EXC-SEED-02", cadet_email: seededCadets[4]?.cadet_email || "", event_id: "2026S-TW01-LLAB", request_timestamp: now, reason: "Medical", decision: "Denied", decision_by: "cadre@example.edu", decision_timestamp: now, attendance_effect: "Set ED", source: "seed" },
+      { excusal_id: "EXC-SEED-03", cadet_email: seededCadets[2]?.cadet_email || "", event_id: "2026S-TW02-LLAB", request_timestamp: now, reason: "Travel", decision: "Approved", decision_by: "cadre@example.edu", decision_timestamp: now, attendance_effect: "Set E", source: "seed" },
+    ].filter(ex => ex.cadet_email);
+
+    excusals.forEach(ex => {
+      Shamrock.appendExcusal(ex as any);
+      Shamrock.logAudit({
+        action: "excusals.submit",
+        target_table: "Excusals Backend",
+        target_key: ex.excusal_id,
+        new_value: JSON.stringify(ex),
+        source: "seed",
+        run_id: runId,
+      });
+      const normalized = String(ex.attendance_effect || "").toLowerCase();
+      let code = "";
+      if (normalized.includes("er")) code = "ER";
+      else if (normalized.includes("set e")) code = "E";
+      else if (normalized.includes("ed")) code = "ED";
+      if (code) {
+        Shamrock.setAttendance({
+          cadet_email: ex.cadet_email,
+          event_id: ex.event_id,
+          attendance_code: code,
+          source: "seed",
+          updated_at: Shamrock.nowIso(),
+        } as any);
+        Shamrock.logAudit({
+          action: "attendance.set_code",
+          target_table: "Attendance Backend",
+          target_key: `${ex.cadet_email}|${ex.event_id}`,
+          event_id: ex.event_id,
+          new_value: code,
+          source: "seed",
+          run_id: runId,
+        });
+      }
+    });
+
+    const adminAction = {
+      action_id: `ACT-${Utilities.getUuid().slice(0, 8)}`,
+      actor_email: getActorEmail(),
+      action_type: "seed.sample",
+      payload_json: JSON.stringify({ run_id: runId, note: "Seeded full dummy dataset" }),
+      created_at: now,
+      processed_at: now,
+      status: "completed",
+    } as any;
+    Shamrock.appendAdminAction(adminAction);
+    Shamrock.logAudit({
+      action: "admin.action",
+      target_table: "Admin Actions",
+      target_key: adminAction.action_id,
+      new_value: JSON.stringify(adminAction),
+      source: "seed",
+      run_id: runId,
+    });
+
+    try {
+      Shamrock.syncAllPublicViews();
+    } catch (err) {
+      // Frontend not configured; skip
+    }
+  });
+
+  const ui = SpreadsheetApp.getUi();
+  ui.alert("Full dummy dataset seeded", "Cadets, events, attendance, excusals, and admin action logs were seeded. Run a public sync if not auto-configured.", ui.ButtonSet.OK);
+}
+
+function shamrockHealthCheck(): void {
+  const ui = SpreadsheetApp.getUi();
+  const lines: string[] = [];
+  let backendId: string | null = null;
+  let backend: GoogleAppsScript.Spreadsheet.Spreadsheet | null = null;
+  try {
+    backendId = getBackendIdSafe();
+    backend = openBackendSpreadsheetSafe();
+    lines.push(`Backend: ${backend ? backend.getName() : "(active)"}`);
+    if (!backendId || backendId === SHAMROCK_BACKEND_SPREADSHEET_ID) {
+      lines.push("- Backend ID not set in properties (using active spreadsheet)");
+    } else {
+      lines.push(`- Backend ID set: ${backendId}`);
+    }
+  } catch (err) {
+    lines.push(`Backend: not reachable (${err})`);
+  }
+
+  const requiredSheets = [
+    Shamrock.BACKEND_SHEET_NAMES.cadets,
+    Shamrock.BACKEND_SHEET_NAMES.events,
+    Shamrock.BACKEND_SHEET_NAMES.attendance,
+    Shamrock.BACKEND_SHEET_NAMES.excusals,
+    Shamrock.BACKEND_SHEET_NAMES.adminActions,
+    Shamrock.BACKEND_SHEET_NAMES.audit,
+    Shamrock.BACKEND_SHEET_NAMES.dataLegend,
+  ];
+
+  if (backend) {
+    requiredSheets.forEach(name => {
+      const exists = !!backend!.getSheetByName(name);
+      lines.push(`${exists ? "✅" : "⚠"} ${name}`);
+    });
+  }
+
+  try {
+    const frontendId = Shamrock.getFrontendSpreadsheetId();
+    lines.push(`Frontend ID set: ${frontendId}`);
+  } catch (err) {
+    lines.push("Frontend ID not set (set via SHAMROCK Admin → Setup → Set Frontend Spreadsheet ID)");
+  }
+
+  const triggers = ScriptApp.getProjectTriggers();
+  const triggerSummary = triggers.reduce<Record<string, number>>((acc, t) => {
+    const handler = t.getHandlerFunction();
+    acc[handler] = (acc[handler] || 0) + 1;
+    return acc;
+  }, {});
+  const triggerLines = Object.keys(triggerSummary).map(k => `${k}: ${triggerSummary[k]}`);
+  if (triggerLines.length) {
+    lines.push("Triggers:");
+    triggerLines.forEach(t => lines.push(`- ${t}`));
+  } else {
+    lines.push("No triggers installed (install daily sync and form triggers as needed)");
+  }
+
+  const message = lines.join("\n");
+  Logger.log(`[SHAMROCK][health] ${message}`);
+  ui.alert("SHAMROCK Health Check", message, ui.ButtonSet.OK);
+}
+
 function shamrockInstallBackendTabs(): void {
   Shamrock.ensureBackendSheets();
   const ss = openBackendSpreadsheetSafe();
   const sheets = [
     {
       name: "Directory Backend",
-      machine: ["last_name", "first_name", "as_year", "graduation_year", "flight", "squadron", "university", "dorm", "cadet_email", "phone", "home_town", "home_state", "dob", "afsc", "cip_broad", "cip_code", "flight_path_status", "status", "photo_url", "notes", "created_at", "updated_at"],
-      human: ["Last Name", "First Name", "AS Year", "Graduation Year", "Flight", "Squadron", "University", "Dorm", "University Email", "Phone", "Home Town", "Home State", "DOB", "AFSC", "CIP Broad", "CIP Code", "Flight Path Status", "Status", "Photo Url", "Notes", "Created At", "Updated At"],
+      machine: ["last_name", "first_name", "as_year", "graduation_year", "flight", "squadron", "university", "cadet_email", "phone", "dorm", "home_town", "home_state", "dob", "cip_broad", "cip_code", "afsc", "flight_path_status", "status", "photo_url", "notes", "created_at", "updated_at"],
+      human: ["Last Name", "First Name", "AS Year", "Graduation Year", "Flight", "Squadron", "University", "Email", "Phone", "Dorm", "Home Town", "Home State", "DOB", "CIP Broad", "CIP Code", "AFSC", "Flight Path Status", "Status", "Photo Url", "Notes", "Created At", "Updated At"],
     },
     {
       name: "Events Backend",

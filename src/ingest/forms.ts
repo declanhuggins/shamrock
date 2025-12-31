@@ -3,9 +3,14 @@
 var Shamrock: any = (this as any).Shamrock || ((this as any).Shamrock = {});
 
 Shamrock.onFormSubmit = function (e: GoogleAppsScript.Events.SheetsOnFormSubmit): void {
+  if (typeof Shamrock.logInfo === "function") {
+    Shamrock.logInfo("form.submit", "dispatching form submission", { sheet: e && e.range ? e.range.getSheet().getName() : "unknown" });
+  }
   if (!e || !e.range) return;
   const sheetName = e.range.getSheet().getName().toLowerCase();
-  if (sheetName.includes("cadet")) {
+  if (isAttendanceFormSheet(e.range.getSheet())) {
+    handleAttendanceForm(e);
+  } else if (sheetName.includes("cadet")) {
     handleCadetForm(e);
   } else if (sheetName.includes("event")) {
     handleEventForm(e);
@@ -17,10 +22,13 @@ Shamrock.onFormSubmit = function (e: GoogleAppsScript.Events.SheetsOnFormSubmit)
 };
 
 function handleCadetForm(e: GoogleAppsScript.Events.SheetsOnFormSubmit): void {
+  if (typeof Shamrock.logInfo === "function") {
+    Shamrock.logInfo("form.cadet", "processing cadet form submission");
+  }
   Shamrock.withLock(() => {
     Shamrock.ensureBackendSheets();
     const data = e.namedValues || {};
-    const email = pick(data, ["University Email", "Email", "cadet_email", "University Email Address"]);
+    const email = pick(data, ["Email Address", "Email", "email", "cadet_email", "University Email", "University Email Address"]);
     if (!email) throw new Error("Cadet form missing email");
 
     const phoneRaw = pick(data, ["Phone", "phone"]) || "";
@@ -62,6 +70,9 @@ function handleCadetForm(e: GoogleAppsScript.Events.SheetsOnFormSubmit): void {
       updated_at: Shamrock.nowIso(),
     } as any;
     Shamrock.upsertCadet(record);
+    if (typeof Shamrock.logInfo === "function") {
+      Shamrock.logInfo("form.cadet", "upserted cadet record", { email: record.cadet_email });
+    }
     Shamrock.logAudit({
       action: "directory.upsert",
       target_table: "Directory Backend",
@@ -81,6 +92,9 @@ function handleCadetForm(e: GoogleAppsScript.Events.SheetsOnFormSubmit): void {
 }
 
 function handleEventForm(e: GoogleAppsScript.Events.SheetsOnFormSubmit): void {
+  if (typeof Shamrock.logInfo === "function") {
+    Shamrock.logInfo("form.event", "processing event form submission");
+  }
   Shamrock.withLock(() => {
     Shamrock.ensureBackendSheets();
     const data = e.namedValues || {};
@@ -102,6 +116,9 @@ function handleEventForm(e: GoogleAppsScript.Events.SheetsOnFormSubmit): void {
       updated_at: Shamrock.nowIso(),
     } as any;
     Shamrock.upsertEvent(record);
+    if (typeof Shamrock.logInfo === "function") {
+      Shamrock.logInfo("form.event", "upserted event", { event_id: record.event_id });
+    }
     Shamrock.logAudit({
       action: "events.upsert",
       target_table: "Events Backend",
@@ -113,10 +130,13 @@ function handleEventForm(e: GoogleAppsScript.Events.SheetsOnFormSubmit): void {
 }
 
 function handleExcusalForm(e: GoogleAppsScript.Events.SheetsOnFormSubmit): void {
+  if (typeof Shamrock.logInfo === "function") {
+    Shamrock.logInfo("form.excusal", "processing excusal submission");
+  }
   Shamrock.withLock(() => {
     Shamrock.ensureBackendSheets();
     const data = e.namedValues || {};
-    const cadetEmail = (pick(data, ["Email", "University Email", "cadet_email"]) || "").toLowerCase();
+    const cadetEmail = (pick(data, ["Email Address", "Email", "email", "University Email", "cadet_email"]) || "").toLowerCase();
     const eventId = pick(data, ["Event", "Event ID", "event_id"]) || "";
     if (!cadetEmail || !eventId) throw new Error("Excusal form missing email or event");
     const excusalId = `EXC-${Utilities.getUuid()}`;
@@ -135,6 +155,9 @@ function handleExcusalForm(e: GoogleAppsScript.Events.SheetsOnFormSubmit): void 
       source: "form",
     } as any;
     Shamrock.appendExcusal(record);
+    if (typeof Shamrock.logInfo === "function") {
+      Shamrock.logInfo("form.excusal", "recorded excusal", { excusal_id: excusalId, event_id: eventId });
+    }
     applyAttendanceEffect(cadetEmail, eventId, attendanceEffect);
     Shamrock.logAudit({
       action: "excusals.submit",
@@ -168,6 +191,280 @@ function applyAttendanceEffect(cadetEmail: string, eventId: string, effect: stri
     new_value: code,
     source: "form",
   });
+}
+
+function handleAttendanceForm(e: GoogleAppsScript.Events.SheetsOnFormSubmit): void {
+  if (typeof Shamrock.logInfo === "function") {
+    Shamrock.logInfo("form.attendance", "processing attendance submission");
+  }
+  Shamrock.withLock(() => {
+    Shamrock.ensureBackendSheets();
+
+    const sheet = e.range.getSheet();
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(v => String(v || ""));
+    const row = sheet.getRange(e.range.getRow(), 1, 1, sheet.getLastColumn()).getValues()[0];
+    const namedValues = e.namedValues || {};
+
+    const trainingWeekRaw = pick(namedValues, ["Training Week (Format as TW-00):", "Training Week", "training_week", "Training Week (Format as TW-00)"]) || readHeaderValue(headers, row, ["Training Week (Format as TW-00):", "Training Week", "training_week"]);
+    const eventRaw = pick(namedValues, ["Event:", "Event", "event", "Event Name", "Event Type"]) || readHeaderValue(headers, row, ["Event:", "Event", "Event Name", "Event Type"]);
+    const eventIdRaw = pick(namedValues, ["Event ID", "Event Key", "event_id"]) || readHeaderValue(headers, row, ["Event ID", "Event Key", "event_id"]);
+    const flightRaw = pick(namedValues, ["Flight:", "Flight", "flight"]) || readHeaderValue(headers, row, ["Flight:", "Flight", "flight"]);
+
+    const normalizedWeek = normalizeTrainingWeekKey(trainingWeekRaw || "");
+    const eventType = normalizeAttendanceEventType(eventRaw || "");
+    const eventId = resolveAttendanceEventId(eventIdRaw || "", normalizedWeek, eventType);
+
+    const tokens = collectAttendanceTokens(headers, row, eventType, flightRaw || "");
+    if (!tokens.length) throw new Error("Attendance form contained no attendees to record.");
+
+    const mapped = mapTokensToCadetEmails(tokens);
+    if (!mapped.emails.length) throw new Error("No cadet emails matched this attendance submission.");
+
+    mapped.emails.forEach(email => {
+      Shamrock.setAttendance({
+        cadet_email: email,
+        event_id: eventId,
+        attendance_code: "P",
+        source: "form",
+        updated_at: Shamrock.nowIso(),
+      } as any);
+      if (typeof Shamrock.logInfo === "function") {
+        Shamrock.logInfo("form.attendance", "marked present", { email, event_id: eventId, event_type: eventType || "" });
+      }
+      Shamrock.logAudit({
+        action: "attendance.present",
+        target_table: "Attendance Backend",
+        target_key: `${email}|${eventId}`,
+        event_id: eventId,
+        new_value: "P",
+        source: "form",
+        notes: `attendance_form event=${eventType || ""} week=${normalizedWeek || ""}`,
+      });
+    });
+
+    if (mapped.missing.length) {
+      Shamrock.logAudit({
+        action: "attendance.present.missing",
+        target_table: "Attendance Backend",
+        target_key: eventId,
+        event_id: eventId,
+        new_value: "",
+        result: "partial",
+        notes: `Unmatched attendees: ${mapped.missing.join("; ")}`,
+        source: "form",
+      });
+    }
+
+    try {
+      Shamrock.rebuildAttendance();
+    } catch (err) {
+      // If frontend not configured yet, skip quietly
+    }
+  });
+}
+
+function isAttendanceFormSheet(sheet: GoogleAppsScript.Spreadsheet.Sheet): boolean {
+  try {
+    const headers = sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0].map(v => String(v || ""));
+    const markers = ["Training Week (Format as TW-00):", "Event:", "Flight:"];
+    return markers.some(marker => headers.some(h => normalizeHeaderText(h) === normalizeHeaderText(marker)));
+  } catch (err) {
+    return false;
+  }
+}
+
+function readHeaderValue(headers: string[], row: any[], candidates: string[]): string | undefined {
+  for (let i = 0; i < headers.length; i++) {
+    const header = normalizeHeaderText(headers[i]);
+    if (!header) continue;
+    if (candidates.some(c => normalizeHeaderText(c) === header)) {
+      const val = row[i];
+      if (val == null) continue;
+      const s = String(Array.isArray(val) ? val[0] : val).trim();
+      if (s) return s;
+    }
+  }
+  return undefined;
+}
+
+function collectAttendanceTokens(headers: string[], row: any[], eventType: string, flightRaw: string): string[] {
+  const metaHeaders = new Set([
+    normalizeHeaderText("timestamp"),
+    normalizeHeaderText("name"),
+    normalizeHeaderText("Training Week (Format as TW-00):"),
+    normalizeHeaderText("Training Week"),
+    normalizeHeaderText("Event:"),
+    normalizeHeaderText("Event"),
+    normalizeHeaderText("Flight:"),
+    normalizeHeaderText("Flight"),
+    normalizeHeaderText("Event ID"),
+    normalizeHeaderText("Event Key"),
+  ]);
+
+  const tokens: string[] = [];
+  headers.forEach((header, idx) => {
+    const norm = normalizeHeaderText(header);
+    if (!norm || metaHeaders.has(norm)) return;
+    tokens.push(...parseNamesOrEmails(row[idx]));
+  });
+
+  // If a specific flight was selected and appears as its own column, prefer that column's values
+  if (flightRaw) {
+    const targetFlight = normalizeHeaderText(flightRaw);
+    headers.forEach((header, idx) => {
+      if (normalizeHeaderText(header) === normalizeHeaderText(`${flightRaw} Flight`)) {
+        tokens.push(...parseNamesOrEmails(row[idx]));
+      }
+      if (targetFlight && normalizeHeaderText(header) === targetFlight) {
+        tokens.push(...parseNamesOrEmails(row[idx]));
+      }
+    });
+  }
+
+  // If event type implies cross-flight (e.g., Secondary), include any per-flight columns explicitly
+  if (eventType === "secondary") {
+    headers.forEach((header, idx) => {
+      if (normalizeHeaderText(header).endsWith("flight")) {
+        tokens.push(...parseNamesOrEmails(row[idx]));
+      }
+    });
+  }
+
+  return Array.from(new Set(tokens.filter(Boolean)));
+}
+
+function parseNamesOrEmails(val: any): string[] {
+  if (val == null) return [];
+  const raw = Array.isArray(val) ? val.join(" ") : String(val || "");
+  return raw
+    .split(/[\n;,]/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function mapTokensToCadetEmails(tokens: string[]): { emails: string[]; missing: string[] } {
+  const cadets = Shamrock.listCadets();
+  const emailSet = new Set<string>();
+  const nameToEmail = new Map<string, string | null>();
+
+  cadets.forEach(c => {
+    const email = String((c as any).cadet_email || "").toLowerCase();
+    if (email) emailSet.add(email);
+    const last = String((c as any).last_name || "");
+    const first = String((c as any).first_name || "");
+    const key = normalizeNameKey(last, first);
+    if (!key) return;
+    if (nameToEmail.has(key) && nameToEmail.get(key) !== email) {
+      nameToEmail.set(key, null); // ambiguous name
+    } else {
+      nameToEmail.set(key, email);
+    }
+  });
+
+  const emails: string[] = [];
+  const missing: string[] = [];
+
+  tokens.forEach(token => {
+    const lower = token.toLowerCase();
+    if (lower.includes("@")) {
+      const email = lower.trim();
+      if (emailSet.has(email)) {
+        emails.push(email);
+      } else {
+        missing.push(token);
+      }
+      return;
+    }
+
+    const parsed = parseNameToken(token);
+    if (!parsed) {
+      missing.push(token);
+      return;
+    }
+    const key = normalizeNameKey(parsed.last, parsed.first);
+    const email = key ? nameToEmail.get(key) : null;
+    if (email) {
+      emails.push(email);
+    } else {
+      missing.push(token);
+    }
+  });
+
+  return { emails: Array.from(new Set(emails)), missing };
+}
+
+function normalizeNameKey(last: string, first: string): string {
+  const l = String(last || "").trim();
+  const f = String(first || "").trim();
+  if (!l || !f) return "";
+  return `${l.toLowerCase()},${f.toLowerCase()}`;
+}
+
+function parseNameToken(token: string): { first: string; last: string } | null {
+  const s = String(token || "").trim();
+  if (!s) return null;
+  if (s.includes(",")) {
+    const parts = s.split(",");
+    const last = parts[0] || "";
+    const first = parts.slice(1).join(" ") || "";
+    if (last.trim() && first.trim()) return { first: first.trim(), last: last.trim() };
+  }
+  const pieces = s.split(/\s+/);
+  if (pieces.length >= 2) {
+    const first = pieces[0];
+    const last = pieces[pieces.length - 1];
+    if (first && last) return { first, last };
+  }
+  return null;
+}
+
+function normalizeHeaderText(val: string): string {
+  return String(val || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeTrainingWeekKey(raw: string): string {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const match = s.match(/tw[-\s]?(\d{2})/i);
+  if (match) return `TW-${match[1]}`;
+  return s.toUpperCase();
+}
+
+function normalizeAttendanceEventType(raw: string): string {
+  const s = String(raw || "").trim().toLowerCase();
+  if (!s) return "";
+  if (s.includes("llab")) return "llab";
+  if (s.includes("mando")) return "mando";
+  if (s.includes("secondary")) return "secondary";
+  return s;
+}
+
+function resolveAttendanceEventId(eventIdRaw: string, trainingWeek: string, eventType: string): string {
+  const direct = String(eventIdRaw || "").trim();
+  if (direct) return direct;
+
+  const events = Shamrock.listEvents();
+  const candidates = events.filter(ev => {
+    const status = String((ev as any).event_status || "").toLowerCase();
+    if (status !== "published") return false;
+    const affects = String((ev as any).affects_attendance || "true").toLowerCase();
+    if (affects === "false") return false;
+    const twMatch = trainingWeek ? normalizeTrainingWeekKey((ev as any).training_week || "") === trainingWeek : true;
+    const typeMatch = eventType ? normalizeAttendanceEventType((ev as any).event_type || (ev as any).attendance_label || (ev as any).event_name || "") === eventType : true;
+    return twMatch && typeMatch;
+  });
+
+  if (candidates.length === 1) return (candidates[0] as any).event_id;
+  if (candidates.length > 1) {
+    const exact = candidates.find(ev => normalizeTrainingWeekKey((ev as any).training_week || "") === trainingWeek && normalizeAttendanceEventType((ev as any).event_type || "") === eventType);
+    if (exact) return (exact as any).event_id;
+    return (candidates[0] as any).event_id;
+  }
+
+  throw new Error("No matching published event found for this attendance submission. Ensure Training Week and Event match an existing event.");
 }
 
 function normalizeState(input: string): string {

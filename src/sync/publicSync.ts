@@ -4,12 +4,23 @@ var Shamrock: any = (this as any).Shamrock || ((this as any).Shamrock = {});
 
 Shamrock.syncAllPublicViews = function (): void {
   const frontend = SpreadsheetApp.openById(Shamrock.getFrontendSpreadsheetId());
-  Shamrock.rebuildDirectory(frontend);
-  Shamrock.rebuildEvents(frontend);
-  Shamrock.rebuildAttendance(frontend);
-  Shamrock.rebuildExcusals(frontend);
-  Shamrock.rebuildAudit(frontend);
-  Shamrock.rebuildDataLegend(frontend);
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("sync.publicViews", () => {
+      Shamrock.rebuildDirectory(frontend);
+      Shamrock.rebuildEvents(frontend);
+      Shamrock.rebuildAttendance(frontend);
+      Shamrock.rebuildExcusals(frontend);
+      Shamrock.rebuildAudit(frontend);
+      Shamrock.rebuildDataLegend(frontend);
+    }, { frontendId: frontend.getId() });
+  } else {
+    Shamrock.rebuildDirectory(frontend);
+    Shamrock.rebuildEvents(frontend);
+    Shamrock.rebuildAttendance(frontend);
+    Shamrock.rebuildExcusals(frontend);
+    Shamrock.rebuildAudit(frontend);
+    Shamrock.rebuildDataLegend(frontend);
+  }
 };
 
 Shamrock.rebuildDirectory = function (frontend: GoogleAppsScript.Spreadsheet.Spreadsheet = SpreadsheetApp.openById(Shamrock.getFrontendSpreadsheetId())): void {
@@ -52,7 +63,11 @@ Shamrock.rebuildDirectory = function (frontend: GoogleAppsScript.Spreadsheet.Spr
       cadet.updated_at || cadet.created_at || "",
       "backend",
     ]);
-  writeTable(sheet, machineHeaders, humanHeaders, rows);
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuild.directory", () => writeTable(sheet, machineHeaders, humanHeaders, rows), { rows: rows.length });
+  } else {
+    writeTable(sheet, machineHeaders, humanHeaders, rows);
+  }
 
   try {
     sheet.showColumns(1, machineHeaders.length);
@@ -89,7 +104,11 @@ Shamrock.rebuildEvents = function (frontend: GoogleAppsScript.Spreadsheet.Spread
     ev.created_at || "",
     (ev as any).created_by || "System",
   ]);
-  writeTable(sheet, machineHeaders, humanHeaders, rows);
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuild.events", () => writeTable(sheet, machineHeaders, humanHeaders, rows), { rows: rows.length });
+  } else {
+    writeTable(sheet, machineHeaders, humanHeaders, rows);
+  }
 };
 
 Shamrock.rebuildAttendance = function (frontend: GoogleAppsScript.Spreadsheet.Spreadsheet = SpreadsheetApp.openById(Shamrock.getFrontendSpreadsheetId())): void {
@@ -131,7 +150,11 @@ Shamrock.rebuildAttendance = function (frontend: GoogleAppsScript.Spreadsheet.Sp
     return row;
   });
 
-  writeTable(sheet, machineHeaders, humanHeaders, rows);
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuild.attendance", () => writeTable(sheet, machineHeaders, humanHeaders, rows), { rows: rows.length, events: publishedEvents.length });
+  } else {
+    writeTable(sheet, machineHeaders, humanHeaders, rows);
+  }
 };
 
 Shamrock.rebuildExcusals = function (frontend: GoogleAppsScript.Spreadsheet.Spreadsheet = SpreadsheetApp.openById(Shamrock.getFrontendSpreadsheetId())): void {
@@ -169,7 +192,11 @@ Shamrock.rebuildExcusals = function (frontend: GoogleAppsScript.Spreadsheet.Spre
     ];
   });
 
-  writeTable(sheet, machineHeaders, humanHeaders, rows);
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuild.excusals", () => writeTable(sheet, machineHeaders, humanHeaders, rows), { rows: rows.length });
+  } else {
+    writeTable(sheet, machineHeaders, humanHeaders, rows);
+  }
 };
 
 Shamrock.rebuildDataLegend = function (frontend: GoogleAppsScript.Spreadsheet.Spreadsheet = SpreadsheetApp.openById(Shamrock.getFrontendSpreadsheetId())): void {
@@ -192,7 +219,11 @@ Shamrock.rebuildDataLegend = function (frontend: GoogleAppsScript.Spreadsheet.Sp
   const humanHeaders = values[1];
   const body = values.slice(2);
   const sheet = Shamrock.ensureSheetWithHeaders(frontend, "Data Legend", machineHeaders, humanHeaders);
-  writeTable(sheet, machineHeaders, humanHeaders, body);
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuild.dataLegend", () => writeTable(sheet, machineHeaders, humanHeaders, body), { rows: body.length });
+  } else {
+    writeTable(sheet, machineHeaders, humanHeaders, body);
+  }
 };
 
 Shamrock.rebuildAudit = function (frontend: GoogleAppsScript.Spreadsheet.Spreadsheet = SpreadsheetApp.openById(Shamrock.getFrontendSpreadsheetId())): void {
@@ -204,7 +235,11 @@ Shamrock.rebuildAudit = function (frontend: GoogleAppsScript.Spreadsheet.Spreads
   const values = source.getDataRange().getValues();
   const sheet = Shamrock.ensureSheetWithHeaders(frontend, Shamrock.PUBLIC_SHEET_NAMES.audit, values[0], values[1]);
   const body = values.slice(2);
-  writeTable(sheet, values[0], values[1], body);
+  if (typeof Shamrock.withTiming === "function") {
+    Shamrock.withTiming("rebuild.audit", () => writeTable(sheet, values[0], values[1], body), { rows: body.length });
+  } else {
+    writeTable(sheet, values[0], values[1], body);
+  }
 };
 
 function writeTable(sheet: GoogleAppsScript.Spreadsheet.Sheet, machineHeaders: any[], humanHeaders: any[], rows: any[][]): void {

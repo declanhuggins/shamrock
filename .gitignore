@@ -29,8 +29,5 @@ dist/
 *.tmp
 *.swp
 
-# Internal Docs
-docs/*
-
 # Internal Data
 data/*

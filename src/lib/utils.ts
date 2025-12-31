@@ -19,6 +19,56 @@ Shamrock.withLock = function <T>(fn: () => T): T {
   }
 };
 
+type LogLevel = "INFO" | "WARN" | "ERROR";
+
+function formatLogMeta(meta?: Record<string, unknown>): string {
+  if (!meta) return "";
+  try {
+    const json = JSON.stringify(meta);
+    return json && json !== "{}" ? ` | ${json}` : "";
+  } catch (err) {
+    return "";
+  }
+}
+
+Shamrock.log = function (level: LogLevel, action: string, message: string, meta?: Record<string, unknown>): void {
+  const ts = Shamrock.nowIso();
+  const payload = `[SHAMROCK][${level}] ${action}: ${message}${formatLogMeta(meta)}`;
+  try {
+    Logger.log(payload);
+  } catch (err) {
+    // Logging failures should never block workflow.
+  }
+};
+
+Shamrock.logInfo = function (action: string, message: string, meta?: Record<string, unknown>): void {
+  Shamrock.log("INFO", action, message, meta);
+};
+
+Shamrock.logWarn = function (action: string, message: string, meta?: Record<string, unknown>): void {
+  Shamrock.log("WARN", action, message, meta);
+};
+
+Shamrock.logError = function (action: string, message: string, meta?: Record<string, unknown>): void {
+  Shamrock.log("ERROR", action, message, meta);
+};
+
+Shamrock.withTiming = function <T>(action: string, fn: () => T, meta?: Record<string, unknown>): T {
+  const start = Date.now();
+  Shamrock.logInfo(action, "begin", meta);
+  try {
+    const result = fn();
+    const elapsed = Date.now() - start;
+    Shamrock.logInfo(action, `completed in ${elapsed}ms`);
+    return result;
+  } catch (err) {
+    const elapsed = Date.now() - start;
+    const details = err instanceof Error ? { message: err.message, stack: err.stack } : { message: String(err) };
+    Shamrock.logError(action, `failed in ${elapsed}ms`, { ...details, meta });
+    throw err;
+  }
+};
+
 Shamrock.normalizeHeader = function (header: unknown): string {
   return String(header || "").trim();
 };

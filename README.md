@@ -104,6 +104,15 @@ Otherwise:
 - Open the bound Google Sheet
 - Extensions → Apps Script
 
+### Seed Dummy Data (local dev/testing)
+- In the bound Sheet: `SHAMROCK Admin → Utilities → Seed Full Dummy Dataset`
+- This seeds cadets, events, attendance (including cancelled/archived), excusals, and an admin action, then attempts a public sync.
+- Use `Seed Sample Events/Attendance` for a lighter fixture or `Simulate Cadet Intake (5)` for cadet-only seeds.
+
+### Health Check
+- In the bound Sheet: `SHAMROCK Admin → Utilities → Run Health Check`
+- Verifies backend/front-end IDs, required backend sheets, and installed triggers.
+
 ---
 
 ## Project Conventions
@@ -113,6 +122,13 @@ Otherwise:
 - Public excusal visibility is limited to *who / what / status*
 - Excusal reasons and documents are restricted and handled separately
 - Column positions should not be hardcoded; use header-based mapping helpers
+
+## Logging and Audit
+
+- All scripts log through `Shamrock.logInfo/Shamrock.logWarn/Shamrock.logError`, and long-running flows use `Shamrock.withTiming(action, fn)` to emit begin/end markers with durations.
+- Form handlers and rebuild jobs log the target sheet/event to make it easier to trace issues in Apps Script executions.
+- Every mutating path still writes a single audit row via `Shamrock.logAudit`, preserving the append-only audit trail defined in `BACKEND.SPEC.md`.
+- If logging fails (e.g., Logger unavailable), core actions continue; logging is intentionally non-blocking.
 
 ---
 
