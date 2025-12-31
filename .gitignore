@@ -28,3 +28,9 @@ dist/
 # Temporary files
 *.tmp
 *.swp
+
+# Internal Docs
+docs/*
+
+# Internal Data
+data/*

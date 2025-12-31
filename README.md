@@ -67,6 +67,12 @@ Only the contents of `dist/` (plus `appsscript.json`) are pushed to Apps Script.
 
 ## Common Commands
 
+### Login
+
+```bash
+clasp login
+```
+
 ### Build TypeScript
 ```bash
 npm run build
@@ -128,7 +134,6 @@ SHAMROCK exists to provide:
 
 ---
 
-## License / Use
+## License / Use.
 
-Internal use for AFROTC Detachment 225.  
-Not intended for redistribution without authorization.
+The code in this repository is licensed under the MIT License. Intended for internal use for AFROTC Detachment 225.
