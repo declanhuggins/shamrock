@@ -15,6 +15,9 @@ This repository contains the **Apps Script codebase**, developed locally in **VS
 
 ## Documentation scaffolding
 - AI workflow and conventions: `docs/AI_CONTRIBUTION_GUIDE.md`
+- System invariants/spec (internal): `docs/system/SYSTEM_SPEC.md`
+- Operator runbook (internal): `docs/runbooks/OPERATOR_RUNBOOK.md`
+- AI feature-change checklist: `docs/ai/FEATURE_CHANGE_CHECKLIST.md`
 - Public-facing docs home: `docs/public/README.md`
 - Feature doc template: `docs/templates/FEATURE_PUBLIC_DOC_TEMPLATE.md`
 

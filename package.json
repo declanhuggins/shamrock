@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
+    "create": "clasp create --title \"SHAMROCK\" --type standalone --rootDir dist",
     "push": "npm run build && clasp push",
     "push:watch": "clasp push --watch",
     "pull": "clasp pull",
@@ -19,7 +20,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/declanhuggins/shamrock/issues"

@@ -1,0 +1,67 @@
+# AI Feature Change Checklist
+
+This checklist standardizes how AI agents add or change features in SHAMROCK.
+
+Goal: keep changes safe, documented, and consistent with system invariants.
+
+## 1. Define the Feature Boundary
+Before writing or changing any implementation:
+- Write a one-sentence purpose.
+- List surfaces touched (frontend tabs, backend tabs, forms).
+- List who uses it (end user vs operator).
+- Identify entry points (menu actions, triggers, form submit events).
+
+## 2. Confirm System Invariants
+Every feature must comply with docs/system/SYSTEM_SPEC.md.
+
+Confirm explicitly:
+- Provisioning is idempotent ensure-exists (safe to re-run).
+- Tables use row 1 machine headers and start data tables at row 2.
+- Column access is header-driven (no hardcoded column indexes).
+- Dropdowns and validations reference Data Legend ranges.
+- Forms require verified responder emails.
+- Frontend tables are protected; edits flow through forms/logic.
+
+## 3. Document First (Public)
+Update docs/public/README.md before implementing.
+
+Required in the public entry:
+- Overview and operators/end-users.
+- User entry points (forms, menu actions, triggers).
+- Data touched (tabs and key columns by header name).
+- Provisioning notes (what setup ensures and how it remains safe).
+- Validation checklist (manual steps and expected visible outcomes).
+- Rollback guidance (how to disable triggers or revert derived state).
+
+Never include:
+- Raw sheet IDs, form IDs, personal emails, or personal data.
+
+## 4. Document Supporting Internal Changes
+Update internal docs when applicable:
+- Update docs/system/SYSTEM_SPEC.md if any system-wide invariant changes.
+- Update docs/runbooks/OPERATOR_RUNBOOK.md if operator steps or recovery steps change.
+
+## 5. Segment the Implementation (Design-Only Guidance)
+When implementation is created later, keep boundaries consistent:
+- Parsing and validating form responses belongs in src/forms.
+- Sheet read/write helpers belong in src/sheets.
+- Orchestration and business rules belong in src/services.
+- Entry points and trigger installation belong in src/triggers.
+- Shared contracts belong in src/types.ts.
+- IDs, named ranges, and feature flags belong in src/config (no secrets committed).
+
+Each feature should be explainable as:
+- Entry point → service → sheet helpers → audit logging
+
+## 6. Safety Review
+Before marking a feature “ready” in docs:
+- Confirm the change is reversible.
+- Confirm provisioning can be re-run without duplicates.
+- Confirm the feature does not require direct sheet edits by end users.
+- Confirm audit logging expectations are described.
+
+## 7. Validation Expectations
+Every feature doc must include:
+- A short “happy path” validation.
+- At least one failure/edge-case validation.
+- A post-deploy verification step (menus load, triggers present, forms functioning).
