@@ -56,6 +56,12 @@ Runs an idempotent "ensure-exists" setup that creates/ensures the frontend workb
 4) Script ensures the Attendance and Excusal forms exist and collect verified responder emails.
 5) Operator sees a completion alert summarizing counts.
 
+What setup auto-runs
+- Applies frontend formatting/validations (Directory/Leadership/Attendance/Data Legend/FAQs) and creates Sheets “tables” for those tabs.
+- Syncs Data Legend from canonical arrays to frontend; syncs Directory from backend; rebuilds the Attendance matrix.
+- Normalizes form response sheets, trims Attendance response columns, reapplies Attendance Backend formatting.
+- Installs onOpen/onEdit triggers for menus and backend sync; sets up form submit triggers.
+
 ### Error handling and safeguards
 - Idempotent: rerun setup to repair missing resources; it will not intentionally duplicate tabs/forms.
 - If a stored ID is invalid, setup recreates the resource and updates Script Properties.
@@ -114,7 +120,7 @@ clasp login
 4) Create a new Apps Script project (standalone)
 
 ```bash
-clasp create
+npm run create
 ```
 
 5) Open the Apps Script project in the browser
@@ -132,15 +138,19 @@ npm run push
 ```
 
 7) Provision everything (first run)
-- In the Apps Script editor, run the function in `dist/index.js` called `setup`.
+- In the Apps Script editor, run the function in `index.js` called `setup`.
 - Approve all scopes when prompted (Sheets, Forms, Drive, Gmail). Click `Review permissions`, select your account, clikc `Advanced`, and then `Go to Shamrock (unsafe)`. Select `Select all` and then `Continue`.
 - Run `setup` one more time after auth so it can finish cleanly.
 
-8) Confirm the Sheets UI entry point
+8) Add your email to admins (menu access)
+- In the Apps Script editor: Project Settings → Script properties → Add property `SHAMROCK_MENU_ALLOWED_EMAILS` with your email (comma-separated list for multiple admins). Save.
+- This gate controls who sees the SHAMROCK menu in the spreadsheets.
+
+9) Confirm the Sheets UI entry point
 - Open the generated frontend spreadsheet.
 - Use SHAMROCK → “Run setup (ensure-exists)” and confirm it completes.
 
-9) Apply required form settings (manual in Forms UI)
+10) Apply required form settings (manual in Forms UI)
 - Directory Form: Settings → Responses → “Send responders a copy of their response” = Always; “Allow response editing” = On.
 - Attendance Form: “Send responders a copy” = Off; “Allow response editing” = Off.
 - Excusal Form: “Send responders a copy” = Off; “Allow response editing” = Off.

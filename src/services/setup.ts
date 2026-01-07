@@ -650,7 +650,11 @@ namespace SetupService {
           .build(),
       );
 
-      sheet.setConditionalFormatRules(rules);
+      try {
+        sheet.setConditionalFormatRules(rules);
+      } catch (err) {
+        Log.warn(`Unable to set conditional formatting on Attendance Backend: ${err}`);
+      }
     }
 
   function getIds() {

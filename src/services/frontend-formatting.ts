@@ -60,6 +60,7 @@ namespace FrontendFormattingService {
 
   function applyBandingToFrontendTables(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
     Schemas.FRONTEND_TABS.forEach((tab) => {
+      if (tab.name === 'FAQs') return; // FAQs is freeform text, no table banding
       const sheet = ss.getSheetByName(tab.name);
       if (!sheet) return;
       const lastRow = Math.max(sheet.getLastRow(), 3);
@@ -239,7 +240,8 @@ namespace FrontendFormattingService {
       class_year: 'Class',
       phone_display: 'Phone Number',
       cip_code: 'CIP',
-      flight_path_status: 'flight path',
+      squadron: 'Sqdn',
+      flight_path_status: 'Flight Path',
       desired_assigned_afsc: 'Desired / Assigned AFSC',
     });
 
@@ -392,18 +394,40 @@ namespace FrontendFormattingService {
     const sheet = ss.getSheetByName('FAQs');
     if (!sheet) return;
 
-    hideMachineHeaderRow(sheet);
+    // Remove old header rows if they match the legacy schema.
+    try {
+      const first = String(sheet.getRange(1, 1).getValue() || '').trim().toLowerCase();
+      const second = String(sheet.getRange(2, 1).getValue() || '').trim().toLowerCase();
+      if (first === 'faq' && (!second || second === 'faq')) {
+        const deleteCount = Math.min(2, sheet.getMaxRows());
+        if (deleteCount > 0) sheet.deleteRows(1, deleteCount);
+      }
+    } catch (err) {
+      Log.warn(`Unable to normalize FAQ headers: ${err}`);
+    }
+
+    // Strip banding and keep a single wide column for freeform text.
+    sheet.getBandings().forEach((b) => b.remove());
+    const maxCols = sheet.getMaxColumns();
+    if (maxCols > 1) {
+      sheet.deleteColumns(2, maxCols - 1);
+    }
+
+    // Ensure no frozen rows/columns so the page behaves like a blank canvas.
+    try {
+      sheet.setFrozenRows(0);
+      sheet.setFrozenColumns(0);
+    } catch (err) {
+      Log.warn(`Unable to unfreeze FAQ sheet: ${err}`);
+    }
+
     setDefaultFont(sheet);
-
-    // Make the main column wide and wrap existing content without overwriting user edits.
     sheet.setColumnWidth(1, 1000);
-    const lastRow = Math.max(3, sheet.getLastRow());
-    const lastCol = Math.max(1, sheet.getLastColumn());
-    const contentRange = sheet.getRange(3, 1, lastRow - 2, lastCol);
-    contentRange.setWrap(true).setVerticalAlignment('top').setHorizontalAlignment('left');
 
-    // Keep view tidy without deleting user-provided content.
-    freezeTopTwoRows(sheet);
+    // Allow freeform text starting at A1.
+    const totalRows = Math.max(1, sheet.getMaxRows());
+    const contentRange = sheet.getRange(1, 1, totalRows, 1);
+    contentRange.setWrap(true).setVerticalAlignment('top').setHorizontalAlignment('left');
   }
 
   function applyDataLegendFormatting(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
@@ -514,6 +538,10 @@ namespace FrontendFormattingService {
       });
     });
 
-    sheet.setConditionalFormatRules(rules);
+    try {
+      sheet.setConditionalFormatRules(rules);
+    } catch (err) {
+      Log.warn(`Unable to set conditional formatting on Attendance: ${err}`);
+    }
   }
 }
