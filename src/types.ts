@@ -25,7 +25,7 @@ namespace Types {
   }
 
   export interface EnsureFormResult {
-    kind: 'attendance' | 'excusal' | 'directory';
+    kind: 'attendance' | 'excusals' | 'directory';
     id: string;
     created: boolean;
     url: string;

@@ -440,38 +440,49 @@ namespace SetupService {
       }
     }
 
-    // Give Apps Script a moment to create the response sheet link.
-    Utilities.sleep(1500);
+    // Poll for the linked response sheet to appear; Forms can lag before creating it.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt > 0) Utilities.sleep(500);
+      const ss = SpreadsheetApp.openById(spreadsheetId);
+      const sheets = ss.getSheets();
 
-    const ss = SpreadsheetApp.openById(spreadsheetId);
-    const sheets = ss.getSheets();
+      // Prefer the sheet actually linked to this form.
+      const linked = sheets.filter((s) => {
+        try {
+          const url = s.getFormUrl?.();
+          return url && url.includes(form.getId());
+        } catch {
+          return false;
+        }
+      });
 
-    // Prefer the sheet actually linked to this form.
-    const linked = sheets.filter((s) => {
-      try {
-        const url = s.getFormUrl?.();
-        return url && url.includes(form.getId());
-      } catch {
-        return false;
+      const candidates = linked.length
+        ? linked
+        : sheets.filter((s) => RESPONSE_SHEET_REGEX.test(s.getName()) || s.getName() === desiredName);
+
+      const target = ss.getSheetByName(desiredName) || candidates[0];
+      if (!target) continue;
+
+      if (target.getName() !== desiredName) {
+        try {
+          target.setName(desiredName);
+        } catch (err) {
+          Log.warn(`Unable to rename response sheet ${target.getName()} -> ${desiredName}: ${err}`);
+        }
       }
-    });
-
-    const candidates = linked.length
-      ? linked
-      : sheets.filter((s) => RESPONSE_SHEET_REGEX.test(s.getName()) || s.getName() === desiredName);
-
-    const target = ss.getSheetByName(desiredName) || candidates[0];
-    if (!target) {
-      Log.warn(`No response sheet found for ${desiredName} after destination set for formId=${form.getId()}.`);
       return;
     }
 
-    if (target.getName() !== desiredName) {
-      try {
-        target.setName(desiredName);
-      } catch (err) {
-        Log.warn(`Unable to rename response sheet ${target.getName()} -> ${desiredName}: ${err}`);
+    // As a last resort, create a placeholder sheet so downstream setup steps do not crash.
+    try {
+      const ss = SpreadsheetApp.openById(spreadsheetId);
+      const existing = ss.getSheetByName(desiredName);
+      if (!existing) {
+        ss.insertSheet(desiredName);
+        Log.warn(`Created placeholder response sheet ${desiredName} because none were found for formId=${form.getId()}.`);
       }
+    } catch (err) {
+      Log.warn(`Unable to create placeholder response sheet ${desiredName}: ${err}`);
     }
   }
 
@@ -579,7 +590,13 @@ namespace SetupService {
   }
 
   function pruneAttendanceResponseColumnsExplicit() {
-    const sheet = Config.getBackendSheet(Config.RESOURCE_NAMES.ATTENDANCE_FORM_SHEET);
+    let sheet: GoogleAppsScript.Spreadsheet.Sheet;
+    try {
+      sheet = Config.getBackendSheet(Config.RESOURCE_NAMES.ATTENDANCE_FORM_SHEET);
+    } catch (err) {
+      Log.warn(`Attendance response sheet missing; skipping prune. Error: ${err}`);
+      return;
+    }
 
     // First merge any duplicate data so deletes do not drop content.
     slimAttendanceResponseSheet();
@@ -659,15 +676,15 @@ namespace SetupService {
     normalizeAttendanceBackendHeaders();
   }
 
-  function pruneExcusalResponseColumnsExplicit(verbose = true) {
+  function pruneExcusalsResponseColumnsExplicit(verbose = true) {
     const vlog = (msg: string) => {
       if (verbose) Log.info(`[excusal-prune] ${msg}`);
     };
     let sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null;
     try {
-      sheet = Config.getBackendSheet(Config.RESOURCE_NAMES.EXCUSAL_FORM_SHEET);
+      sheet = Config.getBackendSheet(Config.RESOURCE_NAMES.EXCUSALS_FORM_SHEET);
     } catch (err) {
-      Log.warn(`Excusal response sheet missing; skipping prune. Error: ${err}`);
+      Log.warn(`Excusals response sheet missing; skipping prune. Error: ${err}`);
       return;
     }
 
@@ -728,7 +745,7 @@ namespace SetupService {
                 vlog(`  Hid undeletable column ${col} for '${header}' (err: ${err})`);
               } catch (err2) {
                 Log.warn(
-                  `Unable to delete or hide duplicate '${header}' column ${col} in ${Config.RESOURCE_NAMES.EXCUSAL_FORM_SHEET}: ${err}; hide failed: ${err2}`,
+                  `Unable to delete or hide duplicate '${header}' column ${col} in ${Config.RESOURCE_NAMES.EXCUSALS_FORM_SHEET}: ${err}; hide failed: ${err2}`,
                 );
               }
             }
@@ -740,11 +757,11 @@ namespace SetupService {
     }
   }
 
-  // Verbose debug entrypoint to inspect and prune excusal Event columns; callable from Apps Script.
-  export function debugExcusalResponseColumnsVerbose() {
-    pruneExcusalResponseColumnsExplicit(true);
+  // Verbose debug entrypoint to inspect and prune excusals Event columns; callable from Apps Script.
+  export function debugExcusalsResponseColumnsVerbose() {
+    pruneExcusalsResponseColumnsExplicit(true);
     try {
-      const sheet = Config.getBackendSheet(Config.RESOURCE_NAMES.EXCUSAL_FORM_SHEET);
+      const sheet = Config.getBackendSheet(Config.RESOURCE_NAMES.EXCUSALS_FORM_SHEET);
       const lastCol = sheet.getLastColumn();
       const headers = lastCol
         ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map((h) => String(h || ''))
@@ -1007,6 +1024,43 @@ namespace SetupService {
     }
   }
 
+  // Deletes all installable triggers, then reinstalls the canonical SHAMROCK triggers for forms and spreadsheets.
+  export function reinstallAllTriggers() {
+    Log.info('Reinstalling all installable triggers');
+
+    // Clear existing triggers first.
+    ScriptApp.getProjectTriggers().forEach((t) => {
+      try {
+        ScriptApp.deleteTrigger(t);
+      } catch (err) {
+        Log.warn(`Unable to delete trigger ${t.getUniqueId?.() || ''}: ${err}`);
+      }
+    });
+
+    // Recreate spreadsheet triggers (onOpen/onEdit) for frontend and backend.
+    const frontendId = Config.getFrontendId();
+    const backendId = Config.getBackendId();
+    ensureSpreadsheetTrigger('onFrontendOpen', frontendId, 'open');
+    ensureSpreadsheetTrigger('onFrontendEdit', frontendId, 'edit');
+    ensureSpreadsheetTrigger('onBackendOpen', backendId, 'open');
+    ensureSpreadsheetTrigger('onBackendEdit', backendId, 'edit');
+
+    // Recreate form submit triggers for attendance/excusal/directory.
+    const props = Config.scriptProperties();
+    const attendanceFormId = props.getProperty(Config.PROPERTY_KEYS.ATTENDANCE_FORM_ID) || '';
+    const excusalFormId = props.getProperty(Config.PROPERTY_KEYS.EXCUSALS_FORM_ID) || '';
+    const directoryFormId = props.getProperty(Config.PROPERTY_KEYS.DIRECTORY_FORM_ID) || '';
+
+    if (attendanceFormId) ensureFormTrigger('onAttendanceFormSubmit', attendanceFormId);
+    else Log.warn('Cannot reinstall attendance form trigger: ATTENDANCE_FORM_ID missing. Run setup first.');
+
+    if (excusalFormId) ensureFormTrigger('onExcusalsFormSubmit', excusalFormId);
+    else Log.warn('Cannot reinstall excusals form trigger: EXCUSAL_FORM_ID missing. Run setup first.');
+
+    if (directoryFormId) ensureFormTrigger('onDirectoryFormSubmit', directoryFormId);
+    else Log.warn('Cannot reinstall directory form trigger: DIRECTORY_FORM_ID missing. Run setup first.');
+  }
+
   function removeDefaultSheetIfPresent(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet, allowedNames: Set<string>) {
     const defaultSheet = spreadsheet.getSheetByName('Sheet1');
     if (defaultSheet && !allowedNames.has('Sheet1')) {
@@ -1021,7 +1075,7 @@ namespace SetupService {
   }
 
   function ensureForm(
-    kind: 'attendance' | 'excusal' | 'directory',
+    kind: 'attendance' | 'excusals' | 'directory',
     name: string,
     propertyKey: string,
     destinationSpreadsheetId?: string,
@@ -1123,7 +1177,7 @@ namespace SetupService {
 
     // Seed questions if empty.
     if (kind === 'attendance') FormService.ensureAttendanceForm(form);
-    if (kind === 'excusal') FormService.ensureExcusalForm(form);
+    if (kind === 'excusals') FormService.ensureExcusalsForm(form);
     if (kind === 'directory') FormService.ensureDirectoryForm(form);
 
     // Ensure the real response sheet exists and is named correctly (avoid dummy placeholders).
@@ -1131,8 +1185,8 @@ namespace SetupService {
       const desired =
         kind === 'attendance'
           ? Config.RESOURCE_NAMES.ATTENDANCE_FORM_SHEET
-          : kind === 'excusal'
-          ? Config.RESOURCE_NAMES.EXCUSAL_FORM_SHEET
+          : kind === 'excusals'
+          ? Config.RESOURCE_NAMES.EXCUSALS_FORM_SHEET
           : Config.RESOURCE_NAMES.DIRECTORY_FORM_SHEET;
       ensureResponseSheetForForm(form, desired, destinationSpreadsheetId);
     }
@@ -1147,11 +1201,19 @@ namespace SetupService {
 
   export function applyFrontendFormatting() {
     const frontendId = Config.getFrontendId();
+    if (isFrontendFormattingDisabled()) {
+      Log.info('Frontend formatting skipped because DISABLE_FRONTEND_FORMATTING is true.');
+      return;
+    }
     FrontendFormattingService.applyAll(frontendId);
   }
 
   export function rebuildDashboard() {
     const frontendId = Config.getFrontendId();
+    if (isFrontendFormattingDisabled()) {
+      Log.info('Dashboard rebuild skipped because DISABLE_FRONTEND_FORMATTING is true.');
+      return;
+    }
     FrontendFormattingService.applyDashboardOnly(frontendId);
   }
 
@@ -1234,7 +1296,7 @@ namespace SetupService {
     SyncService.syncAllMapped();
     rebuildAttendanceMatrix();
     refreshAttendanceFormEventChoices();
-    refreshExcusalFormEventChoices();
+    refreshExcusalsFormEventChoices();
     applyFrontendFormatting();
 
     const msg = wasPaused
@@ -1285,6 +1347,13 @@ namespace SetupService {
 
   export function rebuildAttendanceMatrix() {
     AttendanceService.rebuildMatrix();
+    try {
+      // Re-apply Attendance header formatting and validations after matrix rebuild.
+      fixAttendanceHeaders();
+      reapplyFrontendProtections();
+    } catch (err) {
+      Log.warn(`fixAttendanceHeaders post-rebuild failed: ${err}`);
+    }
   }
 
   export function refreshAttendanceForm() {
@@ -1294,7 +1363,15 @@ namespace SetupService {
     pruneAttendanceResponseColumnsExplicit();
     normalizeAttendanceBackendHeaders();
     applyAttendanceBackendFormatting();
-    pruneExcusalResponseColumnsExplicit();
+    pruneExcusalsResponseColumnsExplicit();
+  }
+
+  export function refreshExcusalsForm() {
+    const backendId = Config.getBackendId();
+    const ensured = ensureForm('excusals', Config.RESOURCE_NAMES.EXCUSALS_FORM, Config.PROPERTY_KEYS.EXCUSALS_FORM_ID, backendId);
+    const form = FormApp.openById(ensured.id);
+    FormService.refreshExcusalsFormEventChoices(form);
+    pruneExcusalsResponseColumnsExplicit();
   }
 
   export function rebuildAttendanceForm() {
@@ -1327,33 +1404,33 @@ namespace SetupService {
     const backendId = Config.getBackendId();
     const desired = [
       Config.RESOURCE_NAMES.DIRECTORY_FORM_SHEET,
-      Config.RESOURCE_NAMES.EXCUSAL_FORM_SHEET,
+      Config.RESOURCE_NAMES.EXCUSALS_FORM_SHEET,
       Config.RESOURCE_NAMES.ATTENDANCE_FORM_SHEET,
-      'Directory Backend',
       'Leadership Backend',
+      'Directory Backend',
+      'Attendance Matrix Backend',
+      'Attendance Backend',
       'Events Backend',
       'Excusals Backend',
-      'Attendance Backend',
-      'Attendance Matrix Backend',
       'Audit Backend',
       'Data Legend',
     ];
     reorderSheets(backendId, desired);
   }
 
-  export function refreshExcusalFormEventChoices() {
+  export function refreshExcusalsFormEventChoices() {
     const backendId = Config.getBackendId();
-    const ensured = ensureForm('excusal', Config.RESOURCE_NAMES.EXCUSAL_FORM, Config.PROPERTY_KEYS.EXCUSAL_FORM_ID, backendId);
+    const ensured = ensureForm('excusals', Config.RESOURCE_NAMES.EXCUSALS_FORM, Config.PROPERTY_KEYS.EXCUSALS_FORM_ID, backendId);
     const form = FormApp.openById(ensured.id);
-    FormService.refreshExcusalFormEventChoices(form);
+    FormService.refreshExcusalsFormEventChoices(form);
   }
 
   export function pruneAttendanceResponseColumns() {
     pruneAttendanceResponseColumnsExplicit();
   }
 
-  export function pruneExcusalResponseColumns() {
-    pruneExcusalResponseColumnsExplicit();
+  export function pruneExcusalsResponseColumns() {
+    pruneExcusalsResponseColumnsExplicit();
   }
 
   export function refreshEventsArtifacts() {
@@ -1395,7 +1472,11 @@ namespace SetupService {
       ['Directory', 'Leadership', 'Attendance', 'Data Legend'].forEach((name) => {
         ensureTableForSheet(frontendId, name, name.replace(/\s+/g, '_').toLowerCase());
       });
-      FrontendFormattingService.applyAll(frontendId);
+      if (!isFrontendFormattingDisabled()) {
+        FrontendFormattingService.applyAll(frontendId);
+      } else {
+        Log.info('Skipping frontend formatting during archive because DISABLE_FRONTEND_FORMATTING is true.');
+      }
       ProtectionService.applyFrontendProtections(frontendId);
     }
 
@@ -1417,7 +1498,11 @@ namespace SetupService {
       ['Directory', 'Leadership', 'Attendance', 'Data Legend'].forEach((name) => {
         ensureTableForSheet(frontendId, name, name.replace(/\s+/g, '_').toLowerCase());
       });
-      FrontendFormattingService.applyAll(frontendId);
+      if (!isFrontendFormattingDisabled()) {
+        FrontendFormattingService.applyAll(frontendId);
+      } else {
+        Log.info('Skipping frontend formatting during restore because DISABLE_FRONTEND_FORMATTING is true.');
+      }
       ProtectionService.applyFrontendProtections(frontendId);
     }
 
@@ -1455,14 +1540,14 @@ namespace SetupService {
 
     // Ensure forms.
     const attendanceForm = ensureForm('attendance', Config.RESOURCE_NAMES.ATTENDANCE_FORM, Config.PROPERTY_KEYS.ATTENDANCE_FORM_ID, backend.id);
-    const excusalForm = ensureForm('excusal', Config.RESOURCE_NAMES.EXCUSAL_FORM, Config.PROPERTY_KEYS.EXCUSAL_FORM_ID, backend.id);
+    const excusalForm = ensureForm('excusals', Config.RESOURCE_NAMES.EXCUSALS_FORM, Config.PROPERTY_KEYS.EXCUSALS_FORM_ID, backend.id);
     const directoryForm = ensureForm('directory', Config.RESOURCE_NAMES.DIRECTORY_FORM, Config.PROPERTY_KEYS.DIRECTORY_FORM_ID, backend.id);
     formResults.push(attendanceForm, excusalForm, directoryForm);
 
     // Normalize response sheet names based on the form actually linked to each sheet.
     normalizeResponseSheetsForForms(backend.id, [
       { formId: attendanceForm.id, desiredSheetName: Config.RESOURCE_NAMES.ATTENDANCE_FORM_SHEET },
-      { formId: excusalForm.id, desiredSheetName: Config.RESOURCE_NAMES.EXCUSAL_FORM_SHEET },
+      { formId: excusalForm.id, desiredSheetName: Config.RESOURCE_NAMES.EXCUSALS_FORM_SHEET },
       { formId: directoryForm.id, desiredSheetName: Config.RESOURCE_NAMES.DIRECTORY_FORM_SHEET },
     ]);
     // Slim attendance response sheet to drop stale/duplicate columns left over from form rebuilds (keeps any columns that still have data).
@@ -1471,9 +1556,9 @@ namespace SetupService {
     normalizeAttendanceBackendHeaders();
     applyAttendanceBackendFormatting();
 
-    // Refresh event choices for forms (attendance + excusal) after ensuring sheets/forms.
+    // Refresh event choices for forms (attendance + excusals) after ensuring sheets/forms.
     refreshAttendanceFormEventChoices();
-    refreshExcusalFormEventChoices();
+    refreshExcusalsFormEventChoices();
 
     // Ensure form submit triggers for receipts/processing.
     ensureFormTrigger('onAttendanceFormSubmit', attendanceForm.id);
@@ -1488,7 +1573,11 @@ namespace SetupService {
     DirectoryService.syncDirectoryFrontend();
 
     // Apply frontend validations/banding after syncs.
-    FrontendFormattingService.applyAll(frontend.id);
+    if (!isFrontendFormattingDisabled()) {
+      FrontendFormattingService.applyAll(frontend.id);
+    } else {
+      Log.info('Skipping frontend formatting during setup because DISABLE_FRONTEND_FORMATTING is true.');
+    }
 
     // Create structured tables on key frontend sheets via Sheets API (skip if formatting disabled).
     if (!isFrontendFormattingDisabled()) {

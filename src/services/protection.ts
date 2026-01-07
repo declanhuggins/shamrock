@@ -35,40 +35,93 @@ namespace ProtectionService {
     const protection = range.protect().setDescription(description);
     protection.setWarningOnly(Boolean(opts.warningOnly));
     const editors = normalizeEditors(opts.editors || []);
-    if (!protection.isWarningOnly() && editors.length) {
+    if (!protection.isWarningOnly()) {
       try {
-        protection.addEditors(editors);
+        if (protection.canDomainEdit && protection.canDomainEdit()) {
+          try {
+            protection.setDomainEdit(false);
+          } catch (err) {
+            Log.warn(`Unable to disable domain edit for ${description}: ${err}`);
+          }
+        }
+        const currentEditors = (() => {
+          try {
+            return protection.getEditors();
+          } catch {
+            return [];
+          }
+        })();
+
+        // If an allowlist is provided, ensure only those editors are on the list; otherwise remove all extra editors for owner-only.
+        if (editors.length) {
+          try {
+            const desired = new Set(editors.map((e) => e.toLowerCase()));
+            const remove = currentEditors.filter((u) => {
+              const email = (u as any)?.getEmail?.() || '';
+              return email && !desired.has(email.toLowerCase());
+            });
+            if (remove.length) {
+              try {
+                protection.removeEditors(remove as any);
+              } catch (err) {
+                Log.warn(`Unable to prune editors for ${description}: ${err}`);
+              }
+            }
+            protection.addEditors(editors);
+          } catch (err) {
+            Log.warn(`Unable to add editors to protection ${description}: ${err}`);
+          }
+        } else if (currentEditors.length) {
+          try {
+            protection.removeEditors(currentEditors as any);
+          } catch (err) {
+            Log.warn(`Unable to remove editors for ${description}: ${err}`);
+          }
+        }
       } catch (err) {
-        Log.warn(`Unable to add editors to protection ${description}: ${err}`);
+        Log.warn(`Unable to configure editors for ${description}: ${err}`);
       }
     }
     return protection;
   }
 
-  function protectFirstTwoRows(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
+  function getAllowedMenuUsers(): string[] {
+    try {
+      const prop = Config.scriptProperties().getProperty('SHAMROCK_MENU_ALLOWED_EMAILS') || '';
+      return prop
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+    } catch (err) {
+      Log.warn(`Unable to read SHAMROCK_MENU_ALLOWED_EMAILS property: ${err}`);
+      return [];
+    }
+  }
+
+  function protectFirstTwoRows(ss: GoogleAppsScript.Spreadsheet.Spreadsheet, editors: string[] = []) {
     ss.getSheets().forEach((sheet) => {
       const name = sheet.getName();
       if (name === 'FAQs' || name === 'Dashboard') return; // handled separately
       const lastCol = Math.max(1, sheet.getLastColumn(), sheet.getMaxColumns());
       const range = sheet.getRange(1, 1, 2, lastCol);
-      ensureRangeProtection(sheet, range, `${sheet.getName()}:header_rows`, { warningOnly: false });
+      ensureRangeProtection(sheet, range, `${sheet.getName()}:header_rows`, { warningOnly: false, editors });
     });
   }
 
-  function protectFaqs(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
+  function protectFaqs(ss: GoogleAppsScript.Spreadsheet.Spreadsheet, editors: string[] = []) {
     const sheet = ss.getSheetByName('FAQs');
     if (!sheet) return;
     const range = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns());
-    ensureRangeProtection(sheet, range, 'FAQs:all', { warningOnly: false });
+    ensureRangeProtection(sheet, range, 'FAQs:all', { warningOnly: false, editors });
   }
 
-  function protectDashboard(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
+  function protectDashboard(ss: GoogleAppsScript.Spreadsheet.Spreadsheet, editors: string[] = []) {
     const sheet = ss.getSheetByName('Dashboard');
     if (!sheet) return;
     const lastRow = Math.max(3, sheet.getMaxRows());
     // Protect birthdays block (headers + data) in columns I:M
     const birthdayRange = sheet.getRange(3, 9, lastRow - 2, 5);
-    ensureRangeProtection(sheet, birthdayRange, 'Dashboard:birthdays', { warningOnly: false });
+    ensureRangeProtection(sheet, birthdayRange, 'Dashboard:birthdays', { warningOnly: false, editors });
   }
 
   function getLeadershipEmails(ss: GoogleAppsScript.Spreadsheet.Spreadsheet): string[] {
@@ -76,26 +129,31 @@ namespace ProtectionService {
     if (!sheet) return [];
     const lastRow = sheet.getLastRow();
     if (lastRow < 3) return [];
-    const emailCol = 5; // role, rank, last, first, email
-    const values = sheet.getRange(3, emailCol, lastRow - 2, 1).getValues().map((r) => String(r[0] || '').trim());
-    return normalizeEditors(values);
+    // Find the machine header 'email' to avoid hardcoded offsets.
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map((h) => String(h || '').trim().toLowerCase());
+    const emailColIdx = headers.indexOf('email');
+    if (emailColIdx < 0) return [];
+    const values = sheet.getRange(3, emailColIdx + 1, lastRow - 2, 1).getValues().map((r) => String(r[0] || '').trim());
+    // Filter out obvious non-email entries (e.g., roles accidentally stored here).
+    const emails = values.filter((v) => v.includes('@'));
+    return normalizeEditors(emails);
   }
 
-  function protectLeadership(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
+  function protectLeadership(ss: GoogleAppsScript.Spreadsheet.Spreadsheet, editors: string[] = []) {
     const sheet = ss.getSheetByName('Leadership');
     if (!sheet) return;
     const range = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns());
-    ensureRangeProtection(sheet, range, 'Leadership:all', { warningOnly: false });
+    ensureRangeProtection(sheet, range, 'Leadership:all', { warningOnly: false, editors });
   }
 
-  function protectDataLegend(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
+  function protectDataLegend(ss: GoogleAppsScript.Spreadsheet.Spreadsheet, editors: string[] = []) {
     const sheet = ss.getSheetByName('Data Legend');
     if (!sheet) return;
     const range = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns());
-    ensureRangeProtection(sheet, range, 'Data Legend:all', { warningOnly: false });
+    ensureRangeProtection(sheet, range, 'Data Legend:all', { warningOnly: false, editors });
   }
 
-  function protectDirectory(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
+  function protectDirectory(ss: GoogleAppsScript.Spreadsheet.Spreadsheet, editors: string[] = []) {
     const sheet = ss.getSheetByName('Directory');
     if (!sheet) return;
     // Clear any prior sheet-level protections to avoid overlapping "except" scopes.
@@ -106,15 +164,15 @@ namespace ProtectionService {
     // Lock last/first name columns for data rows only (row 3+).
     const dataRowCount = Math.max(1, lastRow - 2);
     const nameRange = sheet.getRange(3, 1, dataRowCount, 2);
-    ensureRangeProtection(sheet, nameRange, 'Directory:last_first_locked', { warningOnly: false });
+    ensureRangeProtection(sheet, nameRange, 'Directory:last_first_locked', { warningOnly: false, editors });
 
     // Warn-only on header rows across visible columns (A1:S2 or to last column if narrower).
     const warnCols = Math.min(lastCol, 19); // Column S = 19
     const warnRange = sheet.getRange(1, 1, dataRowCount, warnCols);
-    ensureRangeProtection(sheet, warnRange, 'Directory:warn_rest', { warningOnly: true });
+    ensureRangeProtection(sheet, warnRange, 'Directory:warn_rest', { warningOnly: true, editors });
   }
 
-  function protectAttendance(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
+  function protectAttendance(ss: GoogleAppsScript.Spreadsheet.Spreadsheet, editors: string[] = []) {
     const sheet = ss.getSheetByName('Attendance');
     if (!sheet) return;
     // Clear any prior sheet protections to prevent stale "except" scopes.
@@ -124,13 +182,12 @@ namespace ProtectionService {
 
     // Lock columns A:G (Last Name through LLAB) across all rows.
     const fixedRange = sheet.getRange(1, 1, lastRow, Math.min(lastCol, 7));
+    // Owner-only for fixed columns (A:G)
     ensureRangeProtection(sheet, fixedRange, 'Attendance:fixed_cols', { warningOnly: false });
 
     // Event columns (H+): protect rows 3+ but allow leadership emails to edit.
     const eventsStartCol = 8;
     if (lastCol >= eventsStartCol) {
-      const editors = getLeadershipEmails(ss);
-      editors.push(Session.getEffectiveUser().getEmail());
       const eventsRange = sheet.getRange(3, eventsStartCol, lastRow - 2, lastCol - eventsStartCol + 1);
       ensureRangeProtection(sheet, eventsRange, 'Attendance:event_cols_with_leadership', {
         warningOnly: false,
@@ -143,12 +200,18 @@ namespace ProtectionService {
     const ss = openFrontend(frontendId);
     if (!ss) return;
 
+    const allowedEditors = normalizeEditors([
+      ...getAllowedMenuUsers(),
+      ...getLeadershipEmails(ss),
+    ]);
+
+    // Only broaden protections for FAQs, Leadership, and Attendance (allowlist). Directory warning stays open; others remain owner-only.
     protectFirstTwoRows(ss);
-    protectFaqs(ss);
+    protectFaqs(ss, allowedEditors);
     protectDashboard(ss);
-    protectLeadership(ss);
+    protectLeadership(ss, allowedEditors);
     protectDataLegend(ss);
-    protectDirectory(ss);
-    protectAttendance(ss);
+    protectDirectory(ss); // name lock stays owner-only; warning is warning-only (open)
+    protectAttendance(ss, allowedEditors);
   }
 }

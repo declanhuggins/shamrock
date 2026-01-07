@@ -215,6 +215,7 @@ namespace FormHandlers {
 					submission_id: submissionId,
 					submitted_at: submittedAt,
 					event: eventName,
+					attendance_type: 'P',
 					email: submittedByEmail,
 					name: submittedByName,
 					flight: flight || flightFromDirectory,
@@ -228,7 +229,7 @@ namespace FormHandlers {
 			// Deliberately omit email receipt for attendance submissions per policy.
 		}
 
-	export function onExcusalFormSubmit(e: GoogleAppsScript.Events.FormsOnFormSubmit) {
+	export function onExcusalsFormSubmit(e: GoogleAppsScript.Events.FormsOnFormSubmit) {
 		const namedValues = getNamedValues(e);
 		const email = getEmail(e);
 		const eventName = getFirstNamedValue(namedValues, 'Event');

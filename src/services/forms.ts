@@ -133,7 +133,7 @@ namespace FormService {
     return groups;
   }
 
-  function enforceExcusalItemOrder(form: GoogleAppsScript.Forms.Form) {
+  function enforceExcusalsItemOrder(form: GoogleAppsScript.Forms.Form) {
     const desired = ['Last Name', 'First Name', 'Event', 'Reason'];
     const items = form.getItems();
     const findByTitle = (title: string) =>
@@ -157,11 +157,37 @@ namespace FormService {
       return item ? item.asTextItem() : null;
     };
 
-    const phoneItem = findTextItem('Phone (+5 (555) 555-5555)');
+    const classYearItem = findTextItem('Class Year (YYYY)');
+    if (classYearItem) {
+      try {
+        const classYearPattern = /^\d{4}$/;
+        const validation = FormApp.createTextValidation().setHelpText('Enter a 4-digit year (YYYY)').requireTextMatchesPattern(classYearPattern.source).build();
+        classYearItem.setValidation(validation);
+      } catch (err) {
+        Log.warn(`Unable to apply class year validation on Directory form: ${err}`);
+      }
+    }
+
+    const cipCodeItem = findTextItem('CIP Code (XX.XXXX)');
+    if (cipCodeItem) {
+      try {
+        const cipPattern = /^\d{2}\.\d{4}$/;
+        const validation = FormApp.createTextValidation().setHelpText('Format: 12.3456').requireTextMatchesPattern(cipPattern.source).build();
+        cipCodeItem.setValidation(validation);
+      } catch (err) {
+        Log.warn(`Unable to apply CIP code validation on Directory form: ${err}`);
+      }
+    }
+
+    const phoneTitles = ['Phone (+5 (555) 555-5555)', 'Phone (+1 (555) 555-5555)'];
+    const phoneItem = phoneTitles.reduce<GoogleAppsScript.Forms.TextItem | null>((found, title) => found || findTextItem(title), null);
     if (phoneItem) {
       try {
-        const phonePattern = /^\+5 \(\d{3}\) \d{3}-\d{4}$/;
-        const validation = FormApp.createTextValidation().setHelpText('Format: +5 (555) 555-5555').requireTextMatchesPattern(phonePattern.source).build();
+        const phonePattern = /^\+\d \(\d{3}\) \d{3}-\d{4}$/;
+        const validation = FormApp.createTextValidation()
+          .setHelpText('Format: +5 (555) 555-5555')
+          .requireTextMatchesPattern(phonePattern.source)
+          .build();
         phoneItem.setValidation(validation);
       } catch (err) {
         Log.warn(`Unable to apply phone validation on Directory form: ${err}`);
@@ -382,8 +408,8 @@ namespace FormService {
           else if (type.includes('mando')) target = mandoStart;
           else if (type.includes('secondary')) target = secondaryStart;
 
-          if (target && (eventQuestion as any).createChoice.length >= 2) {
-            eventChoices.push((eventQuestion as any).createChoice(name, target as any));
+          if (target) {
+            eventChoices.push((eventQuestion as any).createChoice(name, target));
           } else {
             eventChoices.push((eventQuestion as any).createChoice(name, FormApp.PageNavigationType.SUBMIT));
           }
@@ -401,7 +427,7 @@ namespace FormService {
     Log.info(`Attendance form: refreshed event choices count=${eventChoices.length}`);
   }
 
-  export function ensureExcusalForm(form: GoogleAppsScript.Forms.Form) {
+  export function ensureExcusalsForm(form: GoogleAppsScript.Forms.Form) {
     // Prune redundant/legacy items; form already collects verified email via settings.
     removeItemsByTitle(form, ['University Email']);
     removeItemsByTitle(form, ['Event']);
@@ -410,23 +436,23 @@ namespace FormService {
     seedIfEmpty(form, (f) => {
       f.addTextItem().setTitle('Last Name').setRequired(true);
       f.addTextItem().setTitle('First Name').setRequired(true);
-      f.addMultipleChoiceItem().setTitle('Event').setRequired(true).showOtherOption(true);
+      f.addCheckboxItem().setTitle('Event').setRequired(true);
       f.addParagraphTextItem().setTitle('Reason').setRequired(true);
-    }, 'Excusal Form');
+    }, 'Excusals Form');
 
-    refreshExcusalFormEventChoices(form);
-    enforceExcusalItemOrder(form);
+    refreshExcusalsFormEventChoices(form);
+    enforceExcusalsItemOrder(form);
   }
 
-  export function refreshExcusalFormEventChoices(form: GoogleAppsScript.Forms.Form) {
-    // Find or create the Event question as multiple choice with built-in Other.
-    let eventQuestion: GoogleAppsScript.Forms.MultipleChoiceItem | null = null;
+  export function refreshExcusalsFormEventChoices(form: GoogleAppsScript.Forms.Form) {
+    // Find or create the Event question as checkboxes (allow multiple selections).
+    let eventQuestion: GoogleAppsScript.Forms.CheckboxItem | null = null;
 
-    const mcItems = form.getItems(FormApp.ItemType.MULTIPLE_CHOICE);
-    for (const item of mcItems) {
+    const cbItems = form.getItems(FormApp.ItemType.CHECKBOX);
+    for (const item of cbItems) {
       try {
         if (String(item.getTitle() || '').trim() === 'Event') {
-          eventQuestion = item.asMultipleChoiceItem();
+          eventQuestion = item.asCheckboxItem();
           break;
         }
       } catch {
@@ -435,9 +461,19 @@ namespace FormService {
     }
 
     if (!eventQuestion) {
-      // If a legacy list item exists, remove it so we can recreate as MC with Other.
+      // Remove legacy Event items to avoid duplicates and recreate as checkbox.
       removeItemsByTitle(form, ['Event']);
-      eventQuestion = form.addMultipleChoiceItem().setTitle('Event').setRequired(true).showOtherOption(true);
+      eventQuestion = form.addCheckboxItem().setTitle('Event').setRequired(true);
+    }
+
+    // Always allow users to supply an "Other" event choice for excusals.
+    try {
+      // Use dynamic call because typings may not expose setOtherOption on CheckboxItem.
+      const setter = (eventQuestion as any).setOtherOption || (eventQuestion as any).showOtherOption;
+      if (typeof setter === 'function') setter.call(eventQuestion, true);
+      else Log.warn('Unable to enable Other option on Excusals Event question: setter not available');
+    } catch (err) {
+      Log.warn(`Unable to enable Other option on Excusals Event question: ${err}`);
     }
 
     const choices: GoogleAppsScript.Forms.Choice[] = [];
@@ -457,7 +493,7 @@ namespace FormService {
         });
       }
     } catch (err) {
-      Log.warn(`Unable to populate excusal form events: ${err}`);
+      Log.warn(`Unable to populate excusals form events: ${err}`);
     }
 
     // Ensure at least one choice so setChoices does not fail in empty environments.
@@ -465,11 +501,9 @@ namespace FormService {
       choices.push(eventQuestion.createChoice('No events available (add events in Events Backend)'));
     }
 
-    // Built-in Other is enabled via showOtherOption(true); set the main choices here.
     eventQuestion.setChoices(choices);
-    eventQuestion.showOtherOption(true);
-    Log.info(`Excusal form: refreshed event choices count=${choices.length}`);
+    Log.info(`Excusals form: refreshed event choices count=${choices.length}`);
 
-    enforceExcusalItemOrder(form);
+    enforceExcusalsItemOrder(form);
   }
 }

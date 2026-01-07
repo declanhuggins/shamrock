@@ -65,7 +65,7 @@ namespace FrontendFormattingService {
 
   function applyBandingToFrontendTables(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
     Schemas.FRONTEND_TABS.forEach((tab) => {
-      if (tab.name === 'FAQs') return; // FAQs is freeform text, no table banding
+      if (tab.name === 'FAQs' || tab.name === 'Dashboard') return; // FAQs is freeform text; Dashboard handled separately
       const sheet = ss.getSheetByName(tab.name);
       if (!sheet) return;
       const lastRow = Math.max(sheet.getLastRow(), 3);
@@ -490,7 +490,7 @@ namespace FrontendFormattingService {
       ['Github', makeLink('https://github.com/declanhuggins/shamrock')],
       ['Directory Form', makeLink(formUrlFor('DIRECTORY_FORM_ID'))],
       ['Attendance Form', makeLink(formUrlFor('ATTENDANCE_FORM_ID'))],
-      ['Excusals Form', makeLink(formUrlFor('EXCUSAL_FORM_ID'))],
+      ['Excusals Form', makeLink(formUrlFor('EXCUSALS_FORM_ID'))],
       ['Backend sheet (admin)', makeLink(backendUrl)],
     ];
     sheet.getRange(2, 1, 1, 2).setValues(quickLinksHeader).setFontWeight('bold');
@@ -538,39 +538,64 @@ namespace FrontendFormattingService {
 
     // Display column (duplicate-aware cadet label)
     sheet.getRange('L3').setFormula(
-      '=ARRAYFORMULA(IF(I4:I="","", "C/" & IF(COUNTIF(I:I, I4:I)>1, LEFT(J4:J,1) & ". ", "") & I4:I & " (" & TEXT(K4:K, "M/D") & ")"))'
+      '=ARRAYFORMULA(LET(\n'
+      + '  last, I3:I,\n'
+      + '  first, J3:J,\n'
+      + '  dob, K3:K,\n'
+      + '  dup, IF(last="", 0, COUNTIF(last, last)),\n'
+      + '  label, IF(last="", "", "C/" & IF(dup>1, LEFT(first,1) & ". ", "") & last),\n'
+      + '  IF(label="", "", label & IF(dob="", "", " (" & TEXT(dob, "M/D") & ")"))\n'
+      + '))'
     );
 
     // Group column (week grouping from birthdays in column K)
     sheet.getRange('M3').setFormula(
-      '=ARRAYFORMULA(IF(I4:I="","", XMATCH(WEEKNUM(DATE(YEAR(TODAY()), MONTH(K4:K), DAY(K4:K)),1), UNIQUE(FILTER(WEEKNUM(DATE(YEAR(TODAY()), MONTH(K4:K), DAY(K4:K)),1), I4:I<>"")))))'
+      '=ARRAYFORMULA(LET(\n'
+      + '  names, I3:I,\n'
+      + '  dobs, K3:K,\n'
+      + '  mask, (names<>"")*(dobs<>""),\n'
+      + '  wnums, IF(mask, WEEKNUM(DATE(YEAR(TODAY()), MONTH(dobs), DAY(dobs)), 1), ),\n'
+      + '  uniq, FILTER(UNIQUE(wnums), UNIQUE(wnums)<>""),\n'
+      + '  IF(mask, IF(COUNTA(uniq)=0, "", XMATCH(wnums, uniq)), "")\n'
+      + '))'
     );
 
     // Alternating shading by group (odd groups grey, even groups default)
     const cfRange = sheet.getRange('I3:M');
     const rules = sheet.getConditionalFormatRules().filter((r) => {
       const f = r.getBooleanCondition()?.getCriteriaValues?.()?.[0] as string | undefined;
-      return f !== '=ISODD($M4)';
+      return f !== '=ISODD($M3)';
     });
     const oddGroupRule = SpreadsheetApp.newConditionalFormatRule()
-      .whenFormulaSatisfied('=ISODD($M4)')
+      .whenFormulaSatisfied('=ISODD($M3)')
       .setBackground('#f0f0f0')
       .setRanges([cfRange])
       .build();
     rules.push(oddGroupRule);
     sheet.setConditionalFormatRules(rules);
 
+    // Apply light banding only to the non-birthday block (A:H).
+    sheet.getBandings().forEach((b) => b.remove());
+    const bandRows = Math.max(1, sheet.getLastRow() - 1);
+    sheet.getRange(2, 1, bandRows, Math.min(8, sheet.getLastColumn()))
+      .applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY);
+
     // Layout polish
     sheet.autoResizeColumns(1, 2); // quick links
     sheet.setColumnWidth(2, 160);
     sheet.autoResizeColumns(4, 2); // metrics
     sheet.setColumnWidth(7, 220); // charts note area
-    sheet.setColumnWidths(9, 5, 140); // birthdays block
-    sheet.getRange('I4:I').setHorizontalAlignment('left');
-    sheet.getRange('J4:J').setHorizontalAlignment('left');
-    sheet.getRange('K4:K').setNumberFormat('M/D/YYYY');
-    sheet.getRange('L4:L').setWrap(true);
-    sheet.getRange('M4:M').setHorizontalAlignment('center');
+    sheet.setColumnWidth(9, 125); // Last Name
+    sheet.setColumnWidth(10, 125); // First Name
+    sheet.setColumnWidth(11, 100); // Birthday
+    sheet.setColumnWidth(12, 175); // Display
+    sheet.setColumnWidth(13, 75); // Group
+    sheet.getRange('I3:I').setHorizontalAlignment('left');
+    sheet.getRange('J3:J').setHorizontalAlignment('left');
+    sheet.getRange('K3:K').setNumberFormat('M/D/YYYY');
+    sheet.getRange('L3:L').setWrap(true);
+    sheet.getRange('M3:M').setHorizontalAlignment('center');
+    sheet.getRange('M3:M').setNumberFormat('0');
 
     // Trim unused space to keep the canvas tight.
     const maxNeededCols = 13; // A-M used for layout
@@ -701,6 +726,9 @@ namespace FrontendFormattingService {
     if (sheet.getLastColumn() >= eventStartCol) {
       sheet.getRange(3, eventStartCol, dataRows, sheet.getLastColumn() - baseCount).setHorizontalAlignment('center');
     }
+    // Explicitly center LLAB/Overall data columns (not just percentages) to avoid left drift.
+    if (llabIdx >= 0) sheet.getRange(3, llabIdx + 1, dataRows, 1).setHorizontalAlignment('center');
+    if (overallIdx >= 0) sheet.getRange(3, overallIdx + 1, dataRows, 1).setHorizontalAlignment('center');
 
     // Percentage formats
     const formatPercent = (idx: number) => {

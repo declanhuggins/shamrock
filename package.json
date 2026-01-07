@@ -5,11 +5,9 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "watch": "tsc --watch",
     "create": "clasp create --title \"SHAMROCK\" --type standalone --rootDir dist",
-    "push": "npm run build && clasp push",
-    "push:watch": "clasp push --watch",
-    "pull": "clasp pull",
+    "push": "npm run build && cp appsscript.json dist/appsscript.json && clasp push",
+    "pull": "clasp pull && cp dist/appsscript.json appsscript.json",
     "status": "clasp status",
     "clean": "rm -rf dist",
     "upgrade": "npx npm-check-updates -u"
@@ -28,7 +26,7 @@
   "homepage": "https://github.com/declanhuggins/shamrock#readme",
   "devDependencies": {
     "@types/google-apps-script": "^2.0.8",
-    "npm-check-updates": "^19.2.0",
+    "npm-check-updates": "^19.3.1",
     "typescript": "^5.9.3"
   }
 }

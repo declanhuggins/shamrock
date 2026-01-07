@@ -14,7 +14,7 @@ namespace AdminService {
     directory: { sheetName: 'Directory Backend', description: 'Cadet directory source of truth', location: 'backend' },
     events: { sheetName: 'Events Backend', description: 'Events definitions', location: 'backend' },
     attendance: { sheetName: 'Attendance Backend', description: 'Attendance submission log', location: 'backend' },
-    excusals: { sheetName: 'Excusals Backend', description: 'Excusal workflow log', location: 'backend' },
+    excusals: { sheetName: 'Excusals Backend', description: 'Excusals workflow log', location: 'backend' },
     data_legend: { sheetName: 'Data Legend', description: 'Validation option ranges', location: 'backend' },
     cadre: { sheetName: 'Leadership Backend', description: 'Leadership contact list', location: 'backend' },
   };

@@ -120,7 +120,7 @@ namespace AttendanceService {
       `num,SUM(cred),` +
       `den,SUM(tot),` +
       `IF(den=0,1,num/den)` +
-      `))))`;
+      `)))))`;
 
     const llabFormula =
       `=ARRAYFORMULA(IF(ROW(${colToLetter(llabCol)}$${startRow}:${colToLetter(llabCol)})<${startRow},"",` +
@@ -132,7 +132,7 @@ namespace AttendanceService {
       `num,SUM(mask*cred),` +
       `den,SUM(mask*tot),` +
       `IF(den=0,1,num/den)` +
-      `))))`;
+      `)))))`;
 
     // Clear existing values in summary columns and apply formulas
     sheet.getRange(startRow, overallCol, rowsCount, 1).clearContent();
@@ -194,13 +194,14 @@ namespace AttendanceService {
     logRows.forEach((entry) => {
       const evName = entry['event'] || entry['display_name'] || '';
       if (!evName) return;
+      const code = String(entry['attendance_type'] || 'P');
       const cadets = parseCadetEntries(entry['cadets'] || '');
       cadets.forEach((c) => {
         const idx = keyToIndex.get(buildKey(c.last, c.first));
         if (idx === undefined) return;
         const row = rows[idx] as any;
         if (evName in row) {
-          row[evName] = 'P';
+          row[evName] = code;
         }
       });
     });

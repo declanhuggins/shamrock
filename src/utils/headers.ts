@@ -34,7 +34,7 @@ namespace Headers {
     submitted: 'Submitted',
     decided: 'Decided',
     attendance: 'Attendance',
-    excusal: 'Excusal',
+    excusal: 'Excusals',
     requested: 'Requested',
     denied: 'Denied',
     approved: 'Approved',

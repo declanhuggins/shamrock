@@ -5,7 +5,7 @@ namespace Config {
     FRONTEND_SHEET_ID: 'FRONTEND_SHEET_ID',
     BACKEND_SHEET_ID: 'BACKEND_SHEET_ID',
     ATTENDANCE_FORM_ID: 'ATTENDANCE_FORM_ID',
-    EXCUSAL_FORM_ID: 'EXCUSAL_FORM_ID',
+    EXCUSALS_FORM_ID: 'EXCUSALS_FORM_ID',
     DIRECTORY_FORM_ID: 'DIRECTORY_FORM_ID',
     FRONTEND_SYNC_PAUSED: 'FRONTEND_SYNC_PAUSED',
   } as const;
@@ -14,10 +14,10 @@ namespace Config {
     FRONTEND_SPREADSHEET: 'SHAMROCK Frontend',
     BACKEND_SPREADSHEET: 'SHAMROCK Backend',
     ATTENDANCE_FORM: 'SHAMROCK Attendance Form',
-    EXCUSAL_FORM: 'SHAMROCK Excusal Form',
+    EXCUSALS_FORM: 'SHAMROCK Excusals Form',
     DIRECTORY_FORM: 'SHAMROCK Directory Form',
     ATTENDANCE_FORM_SHEET: 'Attendance Form Responses',
-    EXCUSAL_FORM_SHEET: 'Excusal Form Responses',
+    EXCUSALS_FORM_SHEET: 'Excusals Form Responses',
     DIRECTORY_FORM_SHEET: 'Directory Form Responses',
   } as const;
 
