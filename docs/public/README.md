@@ -83,17 +83,24 @@ What setup auto-runs
 - Attendance/Excusal form questions are placeholders; real questions will be added later.
 - The built-in Forms “email a copy of my responses” setting may not be controllable via Apps Script; if needed, a submission-trigger email receipt will be implemented.
 
-### Manual formatted-table setup (Sheets UI)
-Apps Script can’t build or update Google’s new “Formatted table” objects. After running `setup` and letting the formatter run once, do this manually in Sheets if you want typed columns/colored dropdowns that stick:
+Notes
+- Some Google Forms features (notably File upload items and certain login requirements) may not be supported by Apps Script in some environments; setup will log warnings and continue.
 
-1) **Freeze & headers**: Scripts freeze rows 1–2 and hide row 1 (machine headers). Keep row 1 hidden; don’t reorder columns.
-2) **Directory**: Select from row 2 down (include display headers). Insert → Formatted table. Column order: Last, First, Year, Class, Flight, Squadron, University, Email, Phone, Dorm, Home Town, Home State, DOB, CIP Broad, CIP Code, Desired/Assigned AFSC, Flight Path Status, Photo, Notes.
-3) **Leadership**: Select from row 2 down, insert a formatted table. Order: Last, First, Rank, Role, Email, Office Phone, Cell Phone, Office Location.
-4) **Attendance**: Select from row 2 down (include events). Overall in column F, LLAB in column G. Insert formatted table. Script still applies conditional formatting for attendance codes; banding may be overwritten if `applyAll` reruns.
-5) **Excusals / Data Legend / Dashboard / FAQs**: Optional formatted tables from row 2 down; keep row 1 hidden.
-6) **Dropdown colors**: Set background colors on source ranges in Data Legend, then create dropdown “from a range” to inherit chips. Colors are UI-only; scripts can’t set them. Use Paste special → Data validation to reuse.
-7) **Protections**: Header rows, Directory name columns, and Attendance A–G are locked; event columns are editable by Leadership emails. Table creation still works because row 2+ remain editable.
-8) **Preserve visuals**: If you want to keep the table look, set script property `DISABLE_FRONTEND_FORMATTING=true` (menu: SHAMROCK → Toggle Frontend Formatting), create tables/colors, then run SHAMROCK → Reapply Frontend Protections.
+### Manual formatted-table setup (Sheets UI)
+Some UI table behaviors are not reliably automated by setup. After running `setup` once and letting formatting run, do the following in the Google Sheets UI:
+
+1) **Convert each sheet to a Table (UI)**
+- On each of: Leadership, Directory, Attendance, Data Legend
+- Click an empty cell, then Select all (Cmd+A), then convert to a Table using the Sheets UI (Insert → Table, or your preferred hotkey).
+- Google Sheets may auto-insert a blank row 2 during this process. If it does, immediately click Undo (bottom-left toast) so the sheet keeps the intended two header rows (machine row 1, display row 2) and data starting at row 3.
+
+2) **Rename the tables (UI)**
+- Rename each table to something stable and obvious (recommended: `Leadership`, `Directory`, `Attendance`, `Data Legend`).
+- This is UI-only and helps operators; scripts do not depend on your table names.
+
+3) **Style as desired (UI)**
+- Apply table colors, typed columns, and any additional formatting you want.
+- If you want to preserve your look, you may set script property `DISABLE_FRONTEND_FORMATTING=true` (menu: SHAMROCK → Toggle Frontend Formatting), then re-run SHAMROCK → Reapply Frontend Protections.
 
 ### Fresh install / startup steps
 Follow this order to stand up a brand-new environment:
@@ -137,20 +144,32 @@ Cloned one file..
 npm run push
 ```
 
-7) Provision everything (first run)
+7) Enable the Sheets Advanced Service (UI)
+- In the Apps Script editor (browser): left sidebar → **Services** → **+** → add **Google Sheets API**.
+- This exposes the `Sheets` advanced service used for table creation/formatting. No gcloud/clasp command needed.
+
+8) Pull the project from Apps Script
+
+```bash
+npm run pull
+```
+
+- This syncs any Apps Script-side changes after enabling the Advanced Service.
+
+9) Provision everything (first run)
 - In the Apps Script editor, run the function in `index.js` called `setup`.
 - Approve all scopes when prompted (Sheets, Forms, Drive, Gmail). Click `Review permissions`, select your account, clikc `Advanced`, and then `Go to Shamrock (unsafe)`. Select `Select all` and then `Continue`.
 - Run `setup` one more time after auth so it can finish cleanly.
 
-8) Add your email to admins (menu access)
+10) Add your email to admins (menu access)
 - In the Apps Script editor: Project Settings → Script properties → Add property `SHAMROCK_MENU_ALLOWED_EMAILS` with your email (comma-separated list for multiple admins). Save.
 - This gate controls who sees the SHAMROCK menu in the spreadsheets.
 
-9) Confirm the Sheets UI entry point
+11) Confirm the Sheets UI entry point
 - Open the generated frontend spreadsheet.
 - Use SHAMROCK → “Run setup (ensure-exists)” and confirm it completes.
 
-10) Apply required form settings (manual in Forms UI)
+12) Apply required form settings (manual in Forms UI)
 - Directory Form: Settings → Responses → “Send responders a copy of their response” = Always; “Allow response editing” = On.
 - Attendance Form: “Send responders a copy” = Off; “Allow response editing” = Off.
 - Excusal Form: “Send responders a copy” = Off; “Allow response editing” = Off.

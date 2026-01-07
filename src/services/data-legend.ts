@@ -7,7 +7,8 @@ namespace DataLegendService {
     values: string[];
   }
 
-  const LEGEND_HEADERS = [
+  const legendSchema = Schemas.BACKEND_TABS.find((t) => t.name === 'Data Legend');
+  const LEGEND_HEADERS = legendSchema?.machineHeaders || [
     'as_year_options',
     'flight_options',
     'squadron_options',
@@ -19,7 +20,7 @@ namespace DataLegendService {
     'flight_path_status_options',
     'attendance_code_options',
   ];
-  const LEGEND_DISPLAY_HEADERS = [
+  const LEGEND_DISPLAY_HEADERS = legendSchema?.displayHeaders || [
     'AS Year Options',
     'Flight Options',
     'Squadron Options',
@@ -38,24 +39,41 @@ namespace DataLegendService {
       Log.warn('Arrays namespace not available; Data Legend not populated.');
       return [];
     }
-    return [
-      { header: 'as_year_options', rangeName: 'AS_YEARS', values: A.AS_YEARS || [] },
-      { header: 'flight_options', rangeName: 'FLIGHTS', values: A.FLIGHTS || [] },
-      { header: 'squadron_options', rangeName: 'SQUADRONS', values: A.SQUADRONS || [] },
-      { header: 'university_options', rangeName: 'UNIVERSITIES', values: A.UNIVERSITIES || [] },
-      { header: 'dorm_options', rangeName: 'DORMS', values: A.DORMS || [] },
-      { header: 'home_state_options', rangeName: 'HOME_STATES', values: A.HOME_STATES || [] },
-      { header: 'cip_broad_area_options', rangeName: 'CIP_BROAD_AREAS', values: A.CIP_BROAD_AREAS || [] },
-      { header: 'afsc_options', rangeName: 'AFSC_OPTIONS', values: A.AFSC_OPTIONS || [] },
-      { header: 'flight_path_status_options', rangeName: 'FLIGHT_PATH_STATUSES', values: A.FLIGHT_PATH_STATUSES || [] },
-      { header: 'attendance_code_options', rangeName: 'ATTENDANCE_CODES', values: A.ATTENDANCE_CODES || [] },
-    ];
+    const valueMap: Record<string, string[]> = {
+      as_year_options: A.AS_YEARS || [],
+      flight_options: A.FLIGHTS || [],
+      squadron_options: A.SQUADRONS || [],
+      university_options: A.UNIVERSITIES || [],
+      dorm_options: A.DORMS || [],
+      home_state_options: A.HOME_STATES || [],
+      cip_broad_area_options: A.CIP_BROAD_AREAS || [],
+      afsc_options: A.AFSC_OPTIONS || [],
+      flight_path_status_options: A.FLIGHT_PATH_STATUSES || [],
+      attendance_code_options: A.ATTENDANCE_CODES || [],
+    };
+
+    const rangeMap: Record<string, string> = {
+      as_year_options: 'AS_YEARS',
+      flight_options: 'FLIGHTS',
+      squadron_options: 'SQUADRONS',
+      university_options: 'UNIVERSITIES',
+      dorm_options: 'DORMS',
+      home_state_options: 'HOME_STATES',
+      cip_broad_area_options: 'CIP_BROAD_AREAS',
+      afsc_options: 'AFSC_OPTIONS',
+      flight_path_status_options: 'FLIGHT_PATH_STATUSES',
+      attendance_code_options: 'ATTENDANCE_CODES',
+    };
+
+    return LEGEND_HEADERS.map((header) => ({
+      header,
+      rangeName: rangeMap[header] || header.toUpperCase(),
+      values: valueMap[header] || [],
+    }));
   }
 
-  function getBackendLegendSheet(): GoogleAppsScript.Spreadsheet.Sheet | null {
-    const backendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '';
-    if (!backendId) return null;
-    return SheetUtils.getSheet(backendId, 'Data Legend');
+  function getBackendLegendSheet(): GoogleAppsScript.Spreadsheet.Sheet {
+    return Config.getBackendSheet('Data Legend');
   }
 
   function ensureLegendHeaders(sheet: GoogleAppsScript.Spreadsheet.Sheet) {
@@ -71,7 +89,6 @@ namespace DataLegendService {
 
   export function refreshLegendFromArrays() {
     const sheet = getBackendLegendSheet();
-    if (!sheet) return;
     const cols = legendColumns();
     if (!cols.length) return;
     ensureLegendHeaders(sheet);

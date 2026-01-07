@@ -25,10 +25,8 @@ namespace DirectoryService {
   }
 
   function getBackendFrontendSheets() {
-    const backendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '';
-    const frontendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.FRONTEND_SHEET_ID) || '';
-    if (!backendId) Log.warn('Backend sheet ID missing; directory sync skipped.');
-    if (!frontendId) Log.warn('Frontend sheet ID missing; directory sync skipped.');
+    const backendId = Config.getBackendId();
+    const frontendId = Config.getFrontendId();
     const backendSheet = backendId ? SheetUtils.getSheet(backendId, 'Directory Backend') : null;
     const frontendSheet = frontendId ? SheetUtils.getSheet(frontendId, 'Directory') : null;
     return { backendSheet, frontendSheet };
@@ -94,7 +92,7 @@ namespace DirectoryService {
       squadron: row['squadron'] || '',
       university: row['university'] || '',
       email: row['email'] || '',
-      phone_display: formatPhoneDisplay(normalizePhone(String(row['phone'] || ''))),
+      phone: formatPhoneDisplay(normalizePhone(String(row['phone'] || ''))),
       dorm: row['dorm'] || '',
       home_town: row['home_town'] || '',
       home_state: row['home_state'] || '',
@@ -175,29 +173,26 @@ namespace DirectoryService {
   }
 
   export function protectFrontendDirectory(frontendId: string) {
-    if (!frontendId) {
-      Log.warn('Frontend sheet ID missing; cannot protect Directory sheet.');
-      return;
-    }
-    const ss = SpreadsheetApp.openById(frontendId);
-    const sheet = ss.getSheetByName('Directory');
-    if (!sheet) {
-      Log.warn('Directory sheet not found; cannot apply protection.');
-      return;
-    }
+    const sheet = Config.getFrontendSheet('Directory');
 
-    const protections = sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET) || [];
-    const protection = protections[0] || sheet.protect();
-    protection.setWarningOnly(false);
+    // Clear any sheet-level protections so cadet edits are not blocked.
+    (sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET) || []).forEach((p: GoogleAppsScript.Spreadsheet.Protection) => p.remove());
+
+    // Remove legacy header protections to avoid stacking.
+    const headerProtections = (sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE) || []).filter((p: GoogleAppsScript.Spreadsheet.Protection) => {
+      const r = p.getRange();
+      return r.getRow() === 1 && r.getNumRows() <= 2;
+    });
+    headerProtections.forEach((p: GoogleAppsScript.Spreadsheet.Protection) => p.remove());
+
+    // Add a warning-only protection on the header rows (machine + display) to discourage edits without blocking the sheet.
     try {
-      const me = Session.getEffectiveUser();
-      protection.addEditor(me);
-      const otherEditors = protection.getEditors().filter((e) => e.getEmail() !== me.getEmail());
-      if (otherEditors.length) {
-        protection.removeEditors(otherEditors);
-      }
+      const headerRange = sheet.getRange(1, 1, 2, sheet.getMaxColumns());
+      const protection = headerRange.protect();
+      protection.setDescription('Directory headers (auto)');
+      protection.setWarningOnly(true);
     } catch (err) {
-      Log.warn(`Unable to tighten editors on Directory protection. Error: ${err}`);
+      Log.warn(`Unable to apply Directory header protection: ${err}`);
     }
   }
 }

@@ -82,8 +82,8 @@ namespace FormService {
   function buildCadetGroups(): CadetGroups {
     const groups: CadetGroups = { byFlight: {}, byCrosstown: {}, allByAs: {}, nonAbroadByAs: {} };
     try {
-      const backendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '';
-      const sheet = backendId ? SheetUtils.getSheet(backendId, 'Directory Backend') : null;
+      const backendId = Config.getBackendId();
+      const sheet = SheetUtils.getSheet(backendId, 'Directory Backend');
       if (!sheet) return groups;
       const table = SheetUtils.readTable(sheet);
       table.rows.forEach((r) => {
@@ -133,23 +133,49 @@ namespace FormService {
     return groups;
   }
 
-  function ensureExcusalFileUploadItem(form: GoogleAppsScript.Forms.Form) {
-    const hasUpload = form
-      .getItems()
-      .some((item) => (item.getType && item.getType() === FormApp.ItemType.FILE_UPLOAD) || (item as any).getHelpText?.() === 'Optional; may require same-domain accounts.');
-    if (hasUpload) return;
-    try {
-      if (typeof (form as any).addFileUploadItem === 'function') {
-        (form as any)
-          .addFileUploadItem()
-          .setTitle('MFR (PDF preferred)')
-          .setHelpText('Optional; may require same-domain accounts.');
-        Log.info('Added file upload item to Excusal Form');
-      } else {
-        throw new Error('addFileUploadItem not available');
+  function enforceExcusalItemOrder(form: GoogleAppsScript.Forms.Form) {
+    const desired = ['Last Name', 'First Name', 'Event', 'Reason'];
+    const items = form.getItems();
+    const findByTitle = (title: string) =>
+      items.find((item) => String(item.getTitle?.() || '').trim().toLowerCase() === title.toLowerCase());
+
+    desired.forEach((title, idx) => {
+      const item = findByTitle(title);
+      if (item) {
+        try {
+          form.moveItem(item, idx);
+        } catch (err) {
+          Log.warn(`Unable to move item ${title}: ${err}`);
+        }
       }
-    } catch (err) {
-      Log.warn(`File upload item not supported; continuing without it. Error: ${err}`);
+    });
+  }
+
+  function applyDirectoryRegexValidations(form: GoogleAppsScript.Forms.Form) {
+    const findTextItem = (title: string): GoogleAppsScript.Forms.TextItem | null => {
+      const item = form.getItems(FormApp.ItemType.TEXT).find((i) => String(i.getTitle() || '').trim() === title);
+      return item ? item.asTextItem() : null;
+    };
+
+    const phoneItem = findTextItem('Phone (+5 (555) 555-5555)');
+    if (phoneItem) {
+      try {
+        const phonePattern = /^\+5 \(\d{3}\) \d{3}-\d{4}$/;
+        const validation = FormApp.createTextValidation().setHelpText('Format: +5 (555) 555-5555').requireTextMatchesPattern(phonePattern.source).build();
+        phoneItem.setValidation(validation);
+      } catch (err) {
+        Log.warn(`Unable to apply phone validation on Directory form: ${err}`);
+      }
+    }
+
+    const photoItem = findTextItem('Photo Link (URL)');
+    if (photoItem) {
+      try {
+        const validation = FormApp.createTextValidation().setHelpText('Enter a valid URL').requireTextIsUrl().build();
+        photoItem.setValidation(validation);
+      } catch (err) {
+        Log.warn(`Unable to apply photo URL validation on Directory form: ${err}`);
+      }
     }
   }
 
@@ -177,6 +203,8 @@ namespace FormService {
       f.addTextItem().setTitle('Photo Link (URL)');
       f.addParagraphTextItem().setTitle('Notes');
     }, 'Directory Form');
+
+    applyDirectoryRegexValidations(form);
   }
 
   export function ensureAttendanceForm(form: GoogleAppsScript.Forms.Form) {
@@ -200,7 +228,7 @@ namespace FormService {
 
     // Section 1: respondent info + event
     form.addTextItem().setTitle('Name').setRequired(true);
-    form.addMultipleChoiceItem().setTitle('Event').setRequired(true);
+    form.addListItem().setTitle('Event').setRequired(true);
 
     // Section 2: Mando branch selector
     form.addPageBreakItem().setTitle('Mando Branch');
@@ -289,20 +317,36 @@ namespace FormService {
   }
 
   export function refreshAttendanceFormEventChoices(form: GoogleAppsScript.Forms.Form) {
-    let eventQuestion: GoogleAppsScript.Forms.MultipleChoiceItem | null = null;
-    const mcItems = form.getItems(FormApp.ItemType.MULTIPLE_CHOICE);
-    for (const item of mcItems) {
+    let eventQuestion: GoogleAppsScript.Forms.ListItem | GoogleAppsScript.Forms.MultipleChoiceItem | null = null;
+
+    const listItems = form.getItems(FormApp.ItemType.LIST);
+    for (const item of listItems) {
       try {
         if (String(item.getTitle() || '').trim() === 'Event') {
-          eventQuestion = item.asMultipleChoiceItem();
+          eventQuestion = item.asListItem();
           break;
         }
       } catch {
-        // Ignore.
+        // ignore
       }
     }
+
     if (!eventQuestion) {
-      Log.warn('Attendance form: cannot refresh events; no multiple-choice item titled "Event"');
+      const mcItems = form.getItems(FormApp.ItemType.MULTIPLE_CHOICE);
+      for (const item of mcItems) {
+        try {
+          if (String(item.getTitle() || '').trim() === 'Event') {
+            eventQuestion = item.asMultipleChoiceItem();
+            break;
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (!eventQuestion) {
+      Log.warn('Attendance form: cannot refresh events; no list/multiple-choice item titled "Event"');
       return;
     }
 
@@ -325,7 +369,7 @@ namespace FormService {
 
     const eventChoices: GoogleAppsScript.Forms.Choice[] = [];
     try {
-      const backendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '';
+      const backendId = Config.getBackendId();
       const eventsSheet = backendId ? SheetUtils.getSheet(backendId, 'Events Backend') : null;
       if (eventsSheet) {
         const eventsTable = SheetUtils.readTable(eventsSheet);
@@ -338,10 +382,10 @@ namespace FormService {
           else if (type.includes('mando')) target = mandoStart;
           else if (type.includes('secondary')) target = secondaryStart;
 
-          if (target) {
-            eventChoices.push(eventQuestion!.createChoice(name, target as any));
+          if (target && (eventQuestion as any).createChoice.length >= 2) {
+            eventChoices.push((eventQuestion as any).createChoice(name, target as any));
           } else {
-            eventChoices.push(eventQuestion!.createChoice(name, FormApp.PageNavigationType.SUBMIT));
+            eventChoices.push((eventQuestion as any).createChoice(name, FormApp.PageNavigationType.SUBMIT));
           }
         });
       }
@@ -353,22 +397,79 @@ namespace FormService {
       if (fallbackStart) eventChoices.push(eventQuestion.createChoice('(set up events first)', fallbackStart));
       else eventChoices.push(eventQuestion.createChoice('(set up events first)', FormApp.PageNavigationType.SUBMIT));
     }
-    eventQuestion.setChoices(eventChoices);
+    (eventQuestion as any).setChoices(eventChoices);
     Log.info(`Attendance form: refreshed event choices count=${eventChoices.length}`);
   }
 
   export function ensureExcusalForm(form: GoogleAppsScript.Forms.Form) {
-    // Prune redundant email item; form already collects verified email via settings.
+    // Prune redundant/legacy items; form already collects verified email via settings.
     removeItemsByTitle(form, ['University Email']);
+    removeItemsByTitle(form, ['Event']);
+    removeItemsByTitle(form, ['Other Event (if "Other")']);
 
     seedIfEmpty(form, (f) => {
       f.addTextItem().setTitle('Last Name').setRequired(true);
       f.addTextItem().setTitle('First Name').setRequired(true);
-      f.addTextItem().setTitle('Event').setRequired(true);
+      f.addMultipleChoiceItem().setTitle('Event').setRequired(true).showOtherOption(true);
       f.addParagraphTextItem().setTitle('Reason').setRequired(true);
     }, 'Excusal Form');
 
-    // Verify file upload support exists even if the form was seeded earlier without it.
-    ensureExcusalFileUploadItem(form);
+    refreshExcusalFormEventChoices(form);
+    enforceExcusalItemOrder(form);
+  }
+
+  export function refreshExcusalFormEventChoices(form: GoogleAppsScript.Forms.Form) {
+    // Find or create the Event question as multiple choice with built-in Other.
+    let eventQuestion: GoogleAppsScript.Forms.MultipleChoiceItem | null = null;
+
+    const mcItems = form.getItems(FormApp.ItemType.MULTIPLE_CHOICE);
+    for (const item of mcItems) {
+      try {
+        if (String(item.getTitle() || '').trim() === 'Event') {
+          eventQuestion = item.asMultipleChoiceItem();
+          break;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!eventQuestion) {
+      // If a legacy list item exists, remove it so we can recreate as MC with Other.
+      removeItemsByTitle(form, ['Event']);
+      eventQuestion = form.addMultipleChoiceItem().setTitle('Event').setRequired(true).showOtherOption(true);
+    }
+
+    const choices: GoogleAppsScript.Forms.Choice[] = [];
+    try {
+      const backendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '';
+      const eventsSheet = backendId ? SheetUtils.getSheet(backendId, 'Events Backend') : null;
+      if (eventsSheet) {
+        const eventsTable = SheetUtils.readTable(eventsSheet);
+        const headers = (eventsTable as any).headers || [];
+        if (headers.length > 0 && headers.every((h: any) => h === '' || h === null)) {
+          Log.warn('Excusal events table has empty headers; check Events Backend');
+        }
+        eventsTable.rows.forEach((r) => {
+          const name = r['display_name'] || r['attendance_column_label'] || r['event_id'];
+          if (!name) return;
+          choices.push(eventQuestion!.createChoice(name));
+        });
+      }
+    } catch (err) {
+      Log.warn(`Unable to populate excusal form events: ${err}`);
+    }
+
+    // Ensure at least one choice so setChoices does not fail in empty environments.
+    if (choices.length === 0) {
+      choices.push(eventQuestion.createChoice('No events available (add events in Events Backend)'));
+    }
+
+    // Built-in Other is enabled via showOtherOption(true); set the main choices here.
+    eventQuestion.setChoices(choices);
+    eventQuestion.showOtherOption(true);
+    Log.info(`Excusal form: refreshed event choices count=${choices.length}`);
+
+    enforceExcusalItemOrder(form);
   }
 }

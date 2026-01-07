@@ -12,18 +12,37 @@ namespace AttendanceService {
     eventType: string;
   }
 
-  const BASE_HEADERS = ['last_name', 'first_name', 'as_year', 'flight', 'squadron'];
-  const SUMMARY_HEADERS = ['overall_attendance_pct', 'llab_attendance_pct'];
+  const ATTENDANCE_SCHEMA = Schemas.getTabSchema('Attendance');
+  const FALLBACK_MACHINE_HEADERS = [
+    'last_name',
+    'first_name',
+    'as_year',
+    'flight',
+    'squadron',
+    'overall_attendance_pct',
+    'llab_attendance_pct',
+  ];
+  const FALLBACK_DISPLAY_HEADERS = [
+    'Last Name',
+    'First Name',
+    'Year',
+    'Flight',
+    'Sqdn',
+    'Overall',
+    'LLAB',
+  ];
+  const ATTENDANCE_MACHINE_HEADERS = ATTENDANCE_SCHEMA?.machineHeaders || FALLBACK_MACHINE_HEADERS;
+  const ATTENDANCE_DISPLAY_HEADERS = ATTENDANCE_SCHEMA?.displayHeaders || FALLBACK_DISPLAY_HEADERS;
+  const ATT_HEADER_OVERALL = ATTENDANCE_MACHINE_HEADERS.find((h) => h === 'overall_attendance_pct') || 'overall_attendance_pct';
+  const ATT_HEADER_LLAB = ATTENDANCE_MACHINE_HEADERS.find((h) => h === 'llab_attendance_pct') || 'llab_attendance_pct';
+  const SUMMARY_HEADERS = [ATT_HEADER_OVERALL, ATT_HEADER_LLAB];
+  const SUMMARY_HEADER_SET = new Set<string>(SUMMARY_HEADERS);
+  const BASE_HEADERS = ATTENDANCE_MACHINE_HEADERS.filter((h) => !SUMMARY_HEADER_SET.has(h));
+  const ATT_HEADER_LAST = BASE_HEADERS.find((h) => h === 'last_name') || 'last_name';
+  const ATT_HEADER_FIRST = BASE_HEADERS.find((h) => h === 'first_name') || 'first_name';
   const CREDIT_CODES = new Set(['P', 'E', 'ES', 'MU', 'MRS']);
   const CREDIT_PATTERNS = ['P*', 'E', 'ES*', 'MU*', 'MRS*'];
   const TOTAL_PATTERNS = ['P*', 'E', 'ES*', 'ER*', 'ED*', 'T*', 'UR*', 'U', 'MU*', 'MRS*'];
-
-  function getIds() {
-    return {
-      backendId: Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '',
-      frontendId: Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.FRONTEND_SHEET_ID) || '',
-    };
-  }
 
   function ensureMatrixSheet(spreadsheetId: string, name: string): GoogleAppsScript.Spreadsheet.Sheet | null {
     if (!spreadsheetId) return null;
@@ -36,16 +55,14 @@ namespace AttendanceService {
   }
 
   function readDirectory(): any[] {
-    const { backendId } = getIds();
-    if (!backendId) return [];
+    const backendId = Config.getBackendId();
     const sheet = SheetUtils.getSheet(backendId, 'Directory Backend');
     if (!sheet) return [];
     return SheetUtils.readTable(sheet).rows;
   }
 
   function readEvents(): EventDef[] {
-    const { backendId } = getIds();
-    if (!backendId) return [];
+    const backendId = Config.getBackendId();
     const sheet = SheetUtils.getSheet(backendId, 'Events Backend');
     if (!sheet) return [];
     return SheetUtils.readTable(sheet)
@@ -59,8 +76,7 @@ namespace AttendanceService {
   }
 
   function readAttendanceLog(): any[] {
-    const { backendId } = getIds();
-    if (!backendId) return [];
+    const backendId = Config.getBackendId();
     const sheet = SheetUtils.getSheet(backendId, 'Attendance Backend');
     if (!sheet) return [];
     return SheetUtils.readTable(sheet).rows;
@@ -80,17 +96,20 @@ namespace AttendanceService {
   function applyAttendanceFormulas(
     sheet: GoogleAppsScript.Spreadsheet.Sheet,
     rowsCount: number,
-    eventsStartCol: number,
-    eventsEndCol: number,
+    machineHeaders: string[],
+    baseLength: number,
   ) {
+    const eventsStartCol = baseLength + 1;
+    const eventsEndCol = machineHeaders.length;
     if (!sheet || rowsCount <= 0 || eventsEndCol < eventsStartCol) return;
 
-    const overallCol = BASE_HEADERS.length + 1; // column for overall_attendance_pct (1-indexed)
-    const llabCol = BASE_HEADERS.length + 2; // column for llab_attendance_pct
+    const overallCol = machineHeaders.indexOf(ATT_HEADER_OVERALL) + 1;
+    const llabCol = machineHeaders.indexOf(ATT_HEADER_LLAB) + 1;
+    if (overallCol <= 0 || llabCol <= 0) return;
     const startRow = 3;
 
-    const eventsHeaderRange = `${colToLetter(eventsStartCol)}1:${colToLetter(eventsEndCol)}1`;
-    const eventsDataRange = `${colToLetter(eventsStartCol)}${startRow}:${colToLetter(eventsEndCol)}`;
+    const eventsHeaderRange = `$${colToLetter(eventsStartCol)}$1:$${colToLetter(eventsEndCol)}$1`;
+    const eventsDataRange = `$${colToLetter(eventsStartCol)}$${startRow}:$${colToLetter(eventsEndCol)}`;
 
     const overallFormula =
       `=ARRAYFORMULA(IF(ROW(${colToLetter(overallCol)}$${startRow}:${colToLetter(overallCol)})<${startRow},"",` +
@@ -100,7 +119,7 @@ namespace AttendanceService {
       `tot,BYCOL(r,LAMBDA(c,IF(SUM(COUNTIF(c,{"${TOTAL_PATTERNS.join('","')}"}))>0,1,0))),` +
       `num,SUM(cred),` +
       `den,SUM(tot),` +
-      `IF(den=0,"",num/den)` +
+      `IF(den=0,1,num/den)` +
       `))))`;
 
     const llabFormula =
@@ -112,7 +131,7 @@ namespace AttendanceService {
       `tot,BYCOL(r,LAMBDA(c,IF(SUM(COUNTIF(c,{"${TOTAL_PATTERNS.join('","')}"}))>0,1,0))),` +
       `num,SUM(mask*cred),` +
       `den,SUM(mask*tot),` +
-      `IF(den=0,"",num/den)` +
+      `IF(den=0,1,num/den)` +
       `))))`;
 
     // Clear existing values in summary columns and apply formulas
@@ -127,7 +146,11 @@ namespace AttendanceService {
   }
 
   function cadetKey(cadet: any): string {
-    return `${normalizeName(cadet.last_name)}|${normalizeName(cadet.first_name)}`;
+    return buildKey(cadet[ATT_HEADER_LAST], cadet[ATT_HEADER_FIRST]);
+  }
+
+  function buildKey(last: string, first: string): string {
+    return `${normalizeName(last)}|${normalizeName(first)}`;
   }
 
   function parseCadetEntries(cadetField: string): CadetKey[] {
@@ -147,15 +170,16 @@ namespace AttendanceService {
   }
 
   function buildMatrixRows(directory: any[], events: EventDef[], logRows: any[]) {
-    const rows = directory.map((d) => ({
-      last_name: d['last_name'] || '',
-      first_name: d['first_name'] || '',
-      as_year: d['as_year'] || '',
-      flight: d['flight'] || '',
-      squadron: d['squadron'] || '',
-      overall_attendance_pct: '',
-      llab_attendance_pct: '',
-    }));
+    const rows = directory.map((d) => {
+      const baseRow: any = {};
+      BASE_HEADERS.forEach((h) => {
+        baseRow[h] = d[h] || '';
+      });
+      SUMMARY_HEADERS.forEach((h) => {
+        baseRow[h] = '';
+      });
+      return baseRow;
+    });
 
     const keyToIndex = new Map<string, number>();
     rows.forEach((r, idx) => keyToIndex.set(cadetKey(r), idx));
@@ -172,7 +196,7 @@ namespace AttendanceService {
       if (!evName) return;
       const cadets = parseCadetEntries(entry['cadets'] || '');
       cadets.forEach((c) => {
-        const idx = keyToIndex.get(`${normalizeName(c.last)}|${normalizeName(c.first)}`);
+        const idx = keyToIndex.get(buildKey(c.last, c.first));
         if (idx === undefined) return;
         const row = rows[idx] as any;
         if (evName in row) {
@@ -185,38 +209,29 @@ namespace AttendanceService {
   }
 
   function writeMatrix(sheet: GoogleAppsScript.Spreadsheet.Sheet, events: EventDef[], rows: any[]) {
-    const machineHeaders = [...BASE_HEADERS, ...SUMMARY_HEADERS, ...events.map((e) => e.name)];
-    const displayHeaders = [
-      'Last Name',
-      'First Name',
-      'AS Year',
-      'Flight',
-      'Squadron',
-      'Overall Attendance %',
-      'LLAB Attendance %',
-      ...events.map((e) => e.name),
-    ];
+    const machineHeaders = [...ATTENDANCE_MACHINE_HEADERS, ...events.map((e) => e.name)];
+    const displayHeaders = [...ATTENDANCE_DISPLAY_HEADERS, ...events.map((e) => e.name)];
+    const baseLength = ATTENDANCE_MACHINE_HEADERS.length;
     sheet.clear();
     if (machineHeaders.length) sheet.getRange(1, 1, 1, machineHeaders.length).setValues([machineHeaders]);
     if (displayHeaders.length) sheet.getRange(2, 1, 1, displayHeaders.length).setValues([displayHeaders]);
     if (rows.length) {
       const data = rows.map((r) => machineHeaders.map((h) => (r as any)[h] ?? ''));
       sheet.getRange(3, 1, data.length, machineHeaders.length).setValues(data);
-      const eventsStartCol = BASE_HEADERS.length + SUMMARY_HEADERS.length + 1;
-      const eventsEndCol = machineHeaders.length;
-      applyAttendanceFormulas(sheet, rows.length, eventsStartCol, eventsEndCol);
+      applyAttendanceFormulas(sheet, rows.length, machineHeaders, baseLength);
     }
   }
 
   export function rebuildMatrix() {
-    const { backendId, frontendId } = getIds();
+    const backendId = Config.getBackendId();
+    const frontendId = Config.getFrontendId();
     const directory = readDirectory();
     const events = readEvents();
     const logRows = readAttendanceLog();
     const matrixRows = buildMatrixRows(directory, events, logRows);
 
     const backendSheet = ensureMatrixSheet(backendId, 'Attendance Matrix Backend');
-    const frontendSheet = frontendId ? SheetUtils.getSheet(frontendId, 'Attendance') : null;
+    const frontendSheet = SheetUtils.getSheet(frontendId, 'Attendance');
 
     if (backendSheet) writeMatrix(backendSheet, events, matrixRows);
     if (frontendSheet) writeMatrix(frontendSheet, events, matrixRows);

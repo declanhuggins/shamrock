@@ -31,26 +31,12 @@ namespace FormHandlers {
 		}
 	}
 
-	function getBackendId(): string {
-		return Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '';
-	}
-
 	function appendToBackend(sheetName: string, rows: Record<string, any>[]) {
-		const backendId = getBackendId();
-		if (!backendId) {
-			Log.warn('Backend sheet ID not set; skipping backend write.');
-			return;
-		}
-		const sheet = SheetUtils.getSheet(backendId, sheetName);
-		if (!sheet) {
-			Log.warn(`Sheet ${sheetName} not found in backend; skipping backend write.`);
-			return;
-		}
-		SheetUtils.appendRows(sheet, rows);
+		SheetUtils.appendRows(Config.getBackendSheet(sheetName), rows);
 	}
 
 	function lookupCadetByEmail(email: string) {
-		const backendId = getBackendId();
+		const backendId = Config.getBackendId();
 		if (!backendId || !email) return null;
 		const directorySheet = SheetUtils.getSheet(backendId, 'Directory Backend');
 		if (!directorySheet) return null;
@@ -249,11 +235,9 @@ namespace FormHandlers {
 		const lastName = getFirstNamedValue(namedValues, 'Last Name');
 		const firstName = getFirstNamedValue(namedValues, 'First Name');
 		const reason = getFirstNamedValue(namedValues, 'Reason');
-		const uploadLink = getFirstNamedValue(namedValues, 'MFR (PDF preferred)');
 		const cadet = lookupCadetByEmail(email);
 		const submittedAt = formatTimestamp(e.response?.getTimestamp?.() || new Date());
 		const requestId = `exc-${Date.now()}`;
-		const notesParts = [reason, uploadLink ? `Upload: ${uploadLink}` : ''].filter(Boolean);
 
 		appendToBackend('Excusals Backend', [
 			{
@@ -271,7 +255,7 @@ namespace FormHandlers {
 				attendance_effect: '',
 				submitted_at: submittedAt,
 				last_updated_at: submittedAt,
-				notes: notesParts.join(' | '),
+				notes: reason,
 			},
 		]);
 

@@ -1,4 +1,4 @@
-// Admin utilities: export/import backend tables as JSON via Drive.
+// Admin utilities: export/import backend tables as CSV via Drive.
 
 namespace AdminService {
   type Category = 'directory' | 'events' | 'attendance' | 'excusals' | 'data_legend' | 'cadre';
@@ -108,15 +108,31 @@ namespace AdminService {
     const parsed = Utilities.parseCsv(csv).map((r) => r.map((c) => String(c ?? '').trim()));
     const rows = parsed.filter((r) => r.some((cell) => cell));
     if (!rows.length) return [];
+
+    const normalize = (h: string) => normalizeHeader(h);
     const headerRow = rows[0].map((h) => String(h || '').trim());
-    const mismatch = headerRow.length !== expectedHeaders.length || headerRow.some((h, i) => h !== expectedHeaders[i]);
-    if (mismatch) {
+    const normalizedHeaderRow = headerRow.map(normalize);
+    const normalizedExpected = expectedHeaders.map(normalize);
+
+    const exactMismatch = headerRow.length !== expectedHeaders.length || headerRow.some((h, i) => h !== expectedHeaders[i]);
+    const normalizedMismatch =
+      normalizedHeaderRow.length !== normalizedExpected.length || normalizedHeaderRow.some((h, i) => h !== normalizedExpected[i]);
+
+    if (exactMismatch && normalizedMismatch) {
       throw new Error('Header mismatch between CSV and target sheet.');
     }
+
+    // If normalized matches but exact differs (e.g., "Reports To" vs "reports_to"), map columns by normalized header.
+    const indexByNormalized = new Map<string, number>();
+    normalizedHeaderRow.forEach((h, idx) => {
+      if (!indexByNormalized.has(h)) indexByNormalized.set(h, idx);
+    });
+
     return rows.slice(1).map((row) => {
       const obj: Record<string, any> = {};
-      expectedHeaders.forEach((h, idx) => {
-        obj[h] = row[idx] ?? '';
+      expectedHeaders.forEach((h) => {
+        const idx = exactMismatch ? indexByNormalized.get(normalize(h)) ?? -1 : expectedHeaders.indexOf(h);
+        obj[h] = idx >= 0 ? row[idx] ?? '' : '';
       });
       return obj;
     });
@@ -148,100 +164,7 @@ namespace AdminService {
     return val;
   }
 
-  export function exportCategory(categoryInput?: string): void {
-    const category = resolveCategory('Export which category?', categoryInput);
-    if (!category) return;
-    const info = CATEGORY_MAP[category];
-    const spreadsheetId = requireSpreadsheetId(info);
-    if (!spreadsheetId) return;
-    const sheet = SheetUtils.getSheet(spreadsheetId, info.sheetName);
-    const locationLabel = info.location === 'backend' ? 'backend' : 'frontend';
-    if (!sheet) {
-      getUi()?.alert(`Sheet ${info.sheetName} not found in ${locationLabel}.`);
-      Log.warn(`Sheet ${info.sheetName} not found in ${locationLabel}.`);
-      return;
-    }
-    const data = SheetUtils.readTable(sheet);
-    const payload = JSON.stringify({ category, description: info.description, headers: data.headers, rows: data.rows }, null, 2);
-    const file = DriveApp.createFile(`shamrock-${category}-${new Date().toISOString()}.json`, payload, 'application/json');
-    const msg = `Export complete. File created: ${file.getName()} (ID: ${file.getId()})`;
-    getUi()?.alert(msg);
-    Log.info(msg);
-  }
-
-  export function importCategory(fileIdInput?: string, categoryInput?: string): void {
-    const category = resolveCategory('Import which category?', categoryInput);
-    if (!category) return;
-    const ui = getUi();
-    const info = CATEGORY_MAP[category];
-
-    const fileId = (() => {
-      if (fileIdInput) return fileIdInput.trim();
-      if (ui) {
-        const idResp = ui.prompt('Enter Drive File ID of the JSON export', '', ui.ButtonSet.OK_CANCEL);
-        if (idResp.getSelectedButton() !== ui.Button.OK) return '';
-        return idResp.getResponseText().trim();
-      }
-      Log.warn('No UI available to prompt for file ID. Provide fileIdInput when calling importCategory.');
-      return '';
-    })();
-
-    if (!fileId) return;
-
-    let content = '';
-    try {
-      content = DriveApp.getFileById(fileId).getBlob().getDataAsString();
-    } catch (err) {
-      ui?.alert(`Unable to read file: ${err}`);
-      Log.warn(`Unable to read file: ${err}`);
-      return;
-    }
-
-    let parsed: any;
-    try {
-      parsed = JSON.parse(content);
-    } catch (err) {
-      ui?.alert(`File is not valid JSON: ${err}`);
-      Log.warn(`File is not valid JSON: ${err}`);
-      return;
-    }
-
-    if (parsed.category !== category || !Array.isArray(parsed.rows) || !Array.isArray(parsed.headers)) {
-      ui?.alert('JSON does not match expected structure (category/headers/rows).');
-      Log.warn('JSON does not match expected structure (category/headers/rows).');
-      return;
-    }
-
-    const spreadsheetId = requireSpreadsheetId(info);
-    if (!spreadsheetId) return;
-
-    const sheet = SheetUtils.getSheet(spreadsheetId, info.sheetName);
-    const locationLabel = info.location === 'backend' ? 'backend' : 'frontend';
-    if (!sheet) {
-      ui?.alert(`Sheet ${info.sheetName} not found in ${locationLabel}.`);
-      Log.warn(`Sheet ${info.sheetName} not found in ${locationLabel}.`);
-      return;
-    }
-
-    // Optional: ensure headers alignment. If mismatched, warn and abort to avoid silent corruption.
-    const existingHeaders = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map((h) => String(h || '').trim());
-    const mismatch = existingHeaders.length !== parsed.headers.length || existingHeaders.some((h: string, i: number) => h !== parsed.headers[i]);
-    if (mismatch) {
-      ui?.alert('Header mismatch between import file and target sheet. Aborting to avoid data corruption.');
-      Log.warn('Header mismatch between import file and target sheet. Aborting to avoid data corruption.');
-      return;
-    }
-
-    SheetUtils.writeTable(sheet, parsed.rows);
-    if (info.location === 'backend') {
-      // Keep frontend view in sync for mapped backend tables (e.g., Leadership).
-      SyncService.syncByBackendSheetName(info.sheetName);
-    }
-
-    const msg = `Import complete into ${info.sheetName}. Rows written: ${parsed.rows.length}`;
-    ui?.alert(msg);
-    Log.info(msg);
-  }
+  // JSON import/export removed; CSV-only flow below.
 
   function resolveCadetCsvFileId(fileIdInput?: string): string {
     if (fileIdInput && fileIdInput.trim()) return fileIdInput.trim();
@@ -258,13 +181,8 @@ namespace AdminService {
   }
 
   export function importCadetCsv(fileIdInput?: string): void {
-    const backendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID);
-    if (!backendId) {
-      getUi()?.alert('Backend sheet ID not set. Run setup first.');
-      Log.warn('Backend sheet ID not set. Run setup first.');
-      return;
-    }
-
+    const backendId = Config.getBackendId();
+ 
     const fileId = resolveCadetCsvFileId(fileIdInput);
     if (!fileId) return;
 
@@ -444,5 +362,21 @@ namespace AdminService {
 
   export function importAttendanceCsv(fileId?: string): void {
     importCategoryCsv(fileId, 'attendance');
+  }
+
+  export function exportLeadershipCsv(): void {
+    exportCategoryCsv('cadre');
+  }
+
+  export function importLeadershipCsv(fileIdInput?: string): void {
+    importCategoryCsv(fileIdInput, 'cadre');
+  }
+
+  export function exportCadetsCsv(): void {
+    exportCategoryCsv('directory');
+  }
+
+  export function importCadetsCsv(fileIdInput?: string): void {
+    importCategoryCsv(fileIdInput, 'directory');
   }
 }

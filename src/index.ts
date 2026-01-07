@@ -33,28 +33,52 @@ function addShamrockMenu() {
 
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('SHAMROCK')
-    .addItem('Run setup (ensure-exists)', 'setup')
-    .addItem('Refresh Data Legend + validations', 'refreshDataLegendAndFrontend')
-    .addItem('Sync Directory Frontend', 'syncDirectoryFrontend')
-    .addItem('Refresh Events + Attendance', 'refreshEventsArtifacts')
-    .addItem('Rebuild Attendance Matrix', 'rebuildAttendanceMatrix')
-    .addItem('Rebuild Attendance Form', 'rebuildAttendanceForm')
-    .addItem('Prune Attendance Response Duplicates', 'pruneAttendanceResponseColumns')
-    .addItem('Apply Frontend Formatting', 'applyFrontendFormatting')
-    .addItem('Toggle Frontend Formatting (on/off)', 'toggleFrontendFormatting')
-    .addItem('Reapply Frontend Protections', 'reapplyFrontendProtections')
-    .addItem('Archive Core Sheets', 'archiveCoreSheets')
-    .addItem('Restore Core Sheets from Archive', 'restoreCoreSheetsFromArchive')
-    .addSeparator()
-    .addItem('Export category (JSON)', 'exportCategory')
-    .addItem('Import category (JSON)', 'importCategory')
-    .addItem('Export Events CSV (backend)', 'exportEventsCsv')
-    .addItem('Import Events CSV (backend)', 'importEventsCsv')
-    .addItem('Export Attendance CSV (backend)', 'exportAttendanceCsv')
-    .addItem('Import Attendance CSV (backend)', 'importAttendanceCsv')
-    .addItem('Import Leadership CSV (backend)', 'importLeadershipCsv')
-    .addItem('Import cadet CSV -> Directory Backend', 'importCadetCsv')
-    .addItem('Sync Directory to Frontend', 'syncDirectoryFrontend')
+    .addSubMenu(
+      ui
+        .createMenu('Setup & Automations')
+        .addItem('Run setup (ensure-exists)', 'setup')
+        .addItem('Pause automations (defer sync)', 'pauseAutomations')
+        .addItem('Resume automations (process pending)', 'resumeAutomations')
+    )
+    .addSubMenu(
+      ui
+        .createMenu('Sync & Refresh')
+        .addItem('Sync Directory (Backend -> Frontend)', 'syncDirectoryBackendToFrontend')
+        .addItem('Sync Leadership (Backend -> Frontend)', 'syncLeadershipBackendToFrontend')
+        .addItem('Sync Data Legend (Backend -> Frontend)', 'syncDataLegendBackendToFrontend')
+        .addItem('Sync ALL mapped (Backend -> Frontend)', 'syncAllBackendToFrontend')
+        .addSeparator()
+        .addItem('Refresh Events + Attendance artifacts', 'refreshEventsArtifacts')
+        .addItem('Refresh Data Legend (Backend -> Frontend)', 'refreshDataLegendAndFrontend')
+        .addItem('Rebuild Dashboard', 'rebuildDashboard')
+        .addItem('Rebuild Attendance Matrix (backend log -> frontend matrix)', 'rebuildAttendanceMatrix')
+        .addItem('Rebuild Attendance Form (events -> form choices)', 'rebuildAttendanceForm')
+        .addItem('Prune Attendance Response Duplicates', 'pruneAttendanceResponseColumns')
+        .addSeparator()
+        .addItem('Reorder Frontend Sheets', 'reorderFrontendSheets')
+        .addItem('Reorder Backend Sheets', 'reorderBackendSheets')
+    )
+    .addSubMenu(
+      ui
+        .createMenu('Formatting & Protections')
+        .addItem('Apply Frontend Formatting', 'applyFrontendFormatting')
+        .addItem('Toggle Frontend Formatting (on/off)', 'toggleFrontendFormatting')
+        .addItem('Toggle Column Width Formatting (on/off)', 'toggleFrontendColumnWidths')
+        .addItem('Reapply Frontend Protections', 'reapplyFrontendProtections')
+    )
+    .addSubMenu(
+      ui
+        .createMenu('Imports/Exports (Backend)')
+        .addItem('Export Cadets CSV (Directory Backend)', 'exportCadetsCsv')
+        .addItem('Import Cadets CSV (Directory Backend)', 'importCadetsCsv')
+        .addItem('Export Leadership CSV (Leadership Backend)', 'exportLeadershipCsv')
+        .addItem('Import Leadership CSV (Leadership Backend)', 'importLeadershipCsv')
+        .addItem('Export Events CSV (Events Backend)', 'exportEventsCsv')
+        .addItem('Import Events CSV (Events Backend)', 'importEventsCsv')
+        .addItem('Export Attendance CSV (Attendance Backend)', 'exportAttendanceCsv')
+        .addItem('Import Attendance CSV (Attendance Backend)', 'importAttendanceCsv')
+    )
+    .addItem('Show menu help / data flow', 'showMenuHelp')
     .addToUi();
 }
 
@@ -85,14 +109,6 @@ function setup() {
   }
 }
 
-function exportCategory() {
-  AdminService.exportCategory();
-}
-
-function importCategory() {
-  AdminService.importCategory();
-}
-
 function exportEventsCsv() {
   AdminService.exportEventsCsv();
 }
@@ -109,16 +125,36 @@ function importAttendanceCsv() {
   AdminService.importAttendanceCsv();
 }
 
+function exportLeadershipCsv() {
+  AdminService.exportLeadershipCsv();
+}
+
 function importLeadershipCsv() {
-  AdminService.importCategoryCsv(undefined, 'cadre');
+  AdminService.importLeadershipCsv();
 }
 
-function importCadetCsv() {
-  AdminService.importCadetCsv();
+function exportCadetsCsv() {
+  AdminService.exportCadetsCsv();
 }
 
-function syncDirectoryFrontend() {
-  SetupService.syncDirectoryFrontend();
+function importCadetsCsv() {
+  AdminService.importCadetsCsv();
+}
+
+function syncDirectoryBackendToFrontend() {
+  SetupService.syncDirectoryBackendToFrontend();
+}
+
+function syncLeadershipBackendToFrontend() {
+  SetupService.syncLeadershipBackendToFrontend();
+}
+
+function syncDataLegendBackendToFrontend() {
+  SetupService.syncDataLegendBackendToFrontend();
+}
+
+function syncAllBackendToFrontend() {
+  SetupService.syncAllBackendToFrontend();
 }
 
 function refreshDataLegendAndFrontend() {
@@ -129,6 +165,10 @@ function refreshEventsArtifacts() {
   SetupService.refreshEventsArtifacts();
 }
 
+function rebuildDashboard() {
+  SetupService.rebuildDashboard();
+}
+
 function rebuildAttendanceMatrix() {
   SetupService.rebuildAttendanceMatrix();
 }
@@ -137,12 +177,32 @@ function rebuildAttendanceForm() {
   SetupService.rebuildAttendanceForm();
 }
 
+function reorderFrontendSheets() {
+  SetupService.reorderFrontendSheets();
+}
+
+function reorderBackendSheets() {
+  SetupService.reorderBackendSheets();
+}
+
 function applyFrontendFormatting() {
   SetupService.applyFrontendFormatting();
 }
 
+function pauseAutomations() {
+  SetupService.pauseAutomations();
+}
+
+function resumeAutomations() {
+  SetupService.resumeAutomations();
+}
+
 function toggleFrontendFormatting() {
   SetupService.toggleFrontendFormatting();
+}
+
+function toggleFrontendColumnWidths() {
+  SetupService.toggleFrontendColumnWidths();
 }
 
 function reapplyFrontendProtections() {
@@ -161,6 +221,18 @@ function pruneAttendanceResponseColumns() {
   SetupService.pruneAttendanceResponseColumns();
 }
 
+function pruneExcusalResponseColumns() {
+  SetupService.pruneExcusalResponseColumns();
+}
+
+function debugExcusalResponseColumnsVerbose() {
+  SetupService.debugExcusalResponseColumnsVerbose();
+}
+
+function showMenuHelp() {
+  SetupService.showMenuHelp();
+}
+
 // Installable onOpen for frontend spreadsheet
 function onFrontendOpen() {
   addShamrockMenu();
@@ -171,8 +243,18 @@ function onBackendOpen() {
   addShamrockMenu();
 }
 
+// Installable onEdit for frontend spreadsheet: mirror allowed Directory edits back to backend with audit + propagation.
+function onFrontendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
+  FrontendEditService.onEdit(e);
+}
+
 // Installable onEdit for backend spreadsheet: resync directory when backend changes.
 function onBackendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
+  if (PauseService.isPaused()) {
+    Log.info('Automation paused; skipping onBackendEdit processing.');
+    return;
+  }
+
   try {
     const sheet = e?.range?.getSheet();
     if (!sheet) return;

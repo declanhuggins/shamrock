@@ -63,8 +63,8 @@ namespace Debug {
 
   function describeTriggers(): TriggerSummary[] {
     const triggers = ScriptApp.getProjectTriggers();
-    const frontendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.FRONTEND_SHEET_ID) || '';
-    const backendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '';
+    const frontendId = Config.getFrontendId();
+    const backendId = Config.getBackendId();
 
     const resolveSheetName = (id: string | null): string | null => {
       if (!id) return null;
@@ -100,8 +100,8 @@ namespace Debug {
   }
 
   export function dumpShamrockStructure(): void {
-    const frontendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.FRONTEND_SHEET_ID) || '';
-    const backendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '';
+    const frontendId = Config.getFrontendId();
+    const backendId = Config.getBackendId();
     const payload = {
       frontend: describeSpreadsheet(frontendId),
       backend: describeSpreadsheet(backendId),
@@ -112,8 +112,8 @@ namespace Debug {
   }
 
   export function dumpShamrockStructureToDrive(): void {
-    const frontendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.FRONTEND_SHEET_ID) || '';
-    const backendId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.BACKEND_SHEET_ID) || '';
+    const frontendId = Config.getFrontendId();
+    const backendId = Config.getBackendId();
     const payload = {
       frontend: describeSpreadsheet(frontendId),
       backend: describeSpreadsheet(backendId),

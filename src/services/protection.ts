@@ -47,10 +47,28 @@ namespace ProtectionService {
 
   function protectFirstTwoRows(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
     ss.getSheets().forEach((sheet) => {
+      const name = sheet.getName();
+      if (name === 'FAQs' || name === 'Dashboard') return; // handled separately
       const lastCol = Math.max(1, sheet.getLastColumn(), sheet.getMaxColumns());
       const range = sheet.getRange(1, 1, 2, lastCol);
       ensureRangeProtection(sheet, range, `${sheet.getName()}:header_rows`, { warningOnly: false });
     });
+  }
+
+  function protectFaqs(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
+    const sheet = ss.getSheetByName('FAQs');
+    if (!sheet) return;
+    const range = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns());
+    ensureRangeProtection(sheet, range, 'FAQs:all', { warningOnly: false });
+  }
+
+  function protectDashboard(ss: GoogleAppsScript.Spreadsheet.Spreadsheet) {
+    const sheet = ss.getSheetByName('Dashboard');
+    if (!sheet) return;
+    const lastRow = Math.max(3, sheet.getMaxRows());
+    // Protect birthdays block (headers + data) in columns I:M
+    const birthdayRange = sheet.getRange(3, 9, lastRow - 2, 5);
+    ensureRangeProtection(sheet, birthdayRange, 'Dashboard:birthdays', { warningOnly: false });
   }
 
   function getLeadershipEmails(ss: GoogleAppsScript.Spreadsheet.Spreadsheet): string[] {
@@ -92,7 +110,7 @@ namespace ProtectionService {
 
     // Warn-only on header rows across visible columns (A1:S2 or to last column if narrower).
     const warnCols = Math.min(lastCol, 19); // Column S = 19
-    const warnRange = sheet.getRange(1, 1, 2, warnCols);
+    const warnRange = sheet.getRange(1, 1, dataRowCount, warnCols);
     ensureRangeProtection(sheet, warnRange, 'Directory:warn_rest', { warningOnly: true });
   }
 
@@ -126,6 +144,8 @@ namespace ProtectionService {
     if (!ss) return;
 
     protectFirstTwoRows(ss);
+    protectFaqs(ss);
+    protectDashboard(ss);
     protectLeadership(ss);
     protectDataLegend(ss);
     protectDirectory(ss);
