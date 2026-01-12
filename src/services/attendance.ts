@@ -42,7 +42,8 @@ namespace AttendanceService {
   const ATT_HEADER_FIRST = BASE_HEADERS.find((h) => h === 'first_name') || 'first_name';
   const CREDIT_CODES = new Set(['P', 'E', 'ES', 'MU', 'MRS']);
   const CREDIT_PATTERNS = ['P*', 'E', 'ES*', 'MU*', 'MRS*'];
-  const TOTAL_PATTERNS = ['P*', 'E', 'ES*', 'ER*', 'ED*', 'T*', 'UR*', 'U', 'MU*', 'MRS*'];
+  // ER/ED/UR stay neutral (not in denominator) so they don't affect attendance %
+  const TOTAL_PATTERNS = ['P*', 'E', 'ES*', 'T*', 'U', 'MU*', 'MRS*'];
 
   function ensureMatrixSheet(spreadsheetId: string, name: string): GoogleAppsScript.Spreadsheet.Sheet | null {
     if (!spreadsheetId) return null;
