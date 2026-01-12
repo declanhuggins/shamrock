@@ -223,8 +223,14 @@ namespace FormHandlers {
 				},
 			]);
 
+			// Incrementally apply the new log entry to the matrices (no full rebuild).
+			AttendanceService.applyAttendanceLogEntry({
+				event: eventName,
+				attendance_type: 'P',
+				cadets: cadetField,
+			});
+
 			SetupService.applyAttendanceBackendFormattingPublic();
-			AttendanceService.rebuildMatrix();
 
 			// Deliberately omit email receipt for attendance submissions per policy.
 		}
@@ -232,16 +238,50 @@ namespace FormHandlers {
 	export function onExcusalsFormSubmit(e: GoogleAppsScript.Events.FormsOnFormSubmit) {
 		const namedValues = getNamedValues(e);
 		const email = getEmail(e);
-		const eventName = getFirstNamedValue(namedValues, 'Event');
-		const lastName = getFirstNamedValue(namedValues, 'Last Name');
-		const firstName = getFirstNamedValue(namedValues, 'First Name');
-		const reason = getFirstNamedValue(namedValues, 'Reason');
-		const cadet = lookupCadetByEmail(email);
 		const submittedAt = formatTimestamp(e.response?.getTimestamp?.() || new Date());
-		const requestId = `exc-${Date.now()}`;
 
-		appendToBackend('Excusals Backend', [
-			{
+		// Look up cadet info from Directory Backend
+		const cadet = lookupCadetByEmail(email);
+
+		// Parse form responses using item responses for robustness
+		let events: string[] = [];
+		let lastName = '';
+		let firstName = '';
+		let reason = '';
+		const itemResponses = e.response?.getItemResponses() || [];
+		
+		for (const itemResponse of itemResponses) {
+			const title = itemResponse.getItem().getTitle();
+			const response = itemResponse.getResponse();
+			
+			if (title === 'Event') {
+				if (Array.isArray(response)) {
+					events = response.map((e) => String(e || '').trim()).filter(Boolean);
+				} else {
+					const eventRaw = String(response || '').trim();
+					events = eventRaw
+						.split(',')
+						.map((ev) => ev.trim())
+						.filter(Boolean);
+				}
+			} else if (title === 'Last Name') {
+				lastName = String(response || '').trim();
+			} else if (title === 'First Name') {
+				firstName = String(response || '').trim();
+			} else if (title === 'Reason') {
+				reason = String(response || '').trim();
+			}
+		}
+
+		if (events.length === 0) {
+			Log.warn(`Excusal submission from ${email} has no events; skipping backend append.`);
+			return;
+		}
+
+		// Create one row per event in Excusals Backend
+		const rows = events.map((eventName) => {
+			const requestId = `exc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+			return {
 				request_id: requestId,
 				event: eventName,
 				email,
@@ -257,8 +297,20 @@ namespace FormHandlers {
 				submitted_at: submittedAt,
 				last_updated_at: submittedAt,
 				notes: reason,
-			},
-		]);
+			};
+		});
+
+		appendToBackend('Excusals Backend', rows);
+
+		// Send notifications and sync to management panel for each row
+		rows.forEach((row) => {
+			ExcusalsService.notifySquadronCommanderOfNewExcusal(row);
+			ExcusalsService.syncExcusalToManagementPanel(row);
+			// Update attendance matrix: empty -> ER, unexcused -> UR
+			ExcusalsService.updateAttendanceOnExcusalSubmission(row);
+		});
+
+		Log.info(`Excusal submission processed: ${email} requesting excusal for ${events.length} event(s)`);
 
 		// Deliberately omit email receipt for excusal submissions per policy.
 	}

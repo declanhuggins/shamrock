@@ -92,4 +92,13 @@ namespace SheetUtils {
     const output = rows.map((r) => headers.map((h) => r[h] ?? ''));
     sheet.getRange(startRow, 1, output.length, headers.length).setValues(output);
   }
+
+  export function lookupRowByEmail(spreadsheetId: string | null, sheetName: string, email: string): Record<string, any> | null {
+    if (!spreadsheetId || !email) return null;
+    const sheet = getSheet(spreadsheetId, sheetName);
+    if (!sheet) return null;
+    const table = readTable(sheet);
+    const lower = email.toLowerCase();
+    return table.rows.find((r) => String(r['email'] || '').toLowerCase() === lower) || null;
+  }
 }

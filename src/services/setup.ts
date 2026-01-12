@@ -724,31 +724,63 @@ namespace SetupService {
 
       indicesByHeader.forEach((cols, header) => {
         if (cols.length <= 1) return;
-        const sorted = cols.slice().sort((a, b) => b - a);
-        let survivor: number | null = null;
+        const sorted = cols.slice().sort((a, b) => a - b); // Sort ascending by column position
         vlog(`Header '${header}' has ${sorted.length} columns: ${sorted.join(', ')}`);
-        sorted.forEach((col) => {
+
+        // Keep the LAST (rightmost) column as the survivor - it's typically the newest form-linked column
+        const survivorCol = sorted[sorted.length - 1];
+        const columnsToDelete = sorted.slice(0, -1); // All except the last one
+        
+        vlog(`  Survivor: column ${survivorCol}, will delete: ${columnsToDelete.join(', ')}`);
+
+        const lastRow = sheet.getLastRow();
+        if (lastRow > 1) {
+          // Merge data from all columns into the survivor
+          const survivorData = sheet.getRange(2, survivorCol, lastRow - 1, 1).getValues();
+          
+          // For each column that will be deleted, merge its data into survivor
+          columnsToDelete.forEach((col) => {
+            const currentMax = sheet.getMaxColumns();
+            if (col > currentMax) return;
+            
+            try {
+              const sourceData = sheet.getRange(2, col, lastRow - 1, 1).getValues();
+              
+              // Merge: copy non-empty cells from source to survivor where survivor is empty
+              for (let i = 0; i < sourceData.length; i++) {
+                const sourceValue = sourceData[i][0];
+                const survivorValue = survivorData[i][0];
+                
+                if ((!survivorValue || String(survivorValue).trim() === '') && sourceValue && String(sourceValue).trim() !== '') {
+                  survivorData[i][0] = sourceValue;
+                  vlog(`  Merged data from col ${col} row ${i + 2} to survivor col ${survivorCol}`);
+                }
+              }
+            } catch (err) {
+              Log.warn(`Unable to read data from column ${col} for merging: ${err}`);
+            }
+          });
+          
+          // Write merged data back to survivor
+          try {
+            sheet.getRange(2, survivorCol, lastRow - 1, 1).setValues(survivorData);
+            vlog(`  Wrote merged data to survivor column ${survivorCol}`);
+          } catch (err) {
+            Log.warn(`Unable to write merged data to survivor column ${survivorCol}: ${err}`);
+          }
+        }
+
+        // Delete columns in reverse order to preserve indices during deletion
+        columnsToDelete.reverse().forEach((col) => {
           const currentMax = sheet.getMaxColumns();
           if (col > currentMax) return;
+          
           try {
             sheet.deleteColumn(col);
             changed = true;
             vlog(`  Deleted column ${col} for header '${header}'`);
           } catch (err) {
-            if (survivor === null) {
-              survivor = col; // keep first undeletable (likely form-linked)
-              vlog(`  Keeping column ${col} as survivor for '${header}' (undeletable: ${err})`);
-            } else {
-              try {
-                sheet.hideColumn(sheet.getRange(1, col));
-                changed = true;
-                vlog(`  Hid undeletable column ${col} for '${header}' (err: ${err})`);
-              } catch (err2) {
-                Log.warn(
-                  `Unable to delete or hide duplicate '${header}' column ${col} in ${Config.RESOURCE_NAMES.EXCUSALS_FORM_SHEET}: ${err}; hide failed: ${err2}`,
-                );
-              }
-            }
+            Log.warn(`Unable to delete column ${col} for '${header}' in ${Config.RESOURCE_NAMES.EXCUSALS_FORM_SHEET}: ${err}`);
           }
         });
       });
@@ -771,6 +803,157 @@ namespace SetupService {
     } catch (err) {
       Log.warn(`[excusal-prune] Unable to log final headers: ${err}`);
       return [];
+    }
+  }
+
+  /**
+   * Process any existing rows in the Excusals Form Responses sheet that haven't been
+   * inserted into Excusals Backend yet (pre-online submissions/backfill).
+   */
+  export function processExcusalsFormBacklog() {
+    try {
+      // Normalize response headers first to ensure single 'Event' column.
+      pruneExcusalsResponseColumnsExplicit(false);
+
+      const respSheet = Config.getBackendSheet(Config.RESOURCE_NAMES.EXCUSALS_FORM_SHEET);
+      const lastCol = respSheet.getLastColumn();
+      const lastRow = respSheet.getLastRow();
+      if (lastCol === 0 || lastRow < 2) {
+        Log.info('No excusals form responses found; nothing to backfill.');
+        return;
+      }
+
+      const headers = respSheet.getRange(1, 1, 1, lastCol).getValues()[0].map((h) => String(h || '').trim());
+      const headerIndex = (name: string, normalize?: (s: string) => string) => {
+        const n = normalize ? headers.map((h) => normalize(h)) : headers;
+        return n.indexOf(name);
+      };
+
+      // Normalize 'Event' header variants like 'Event (Other)', 'Event 2', etc.
+      const normalizeEventHeader = (raw: string) => {
+        const h = (raw || '').trim().toLowerCase();
+        if (h === 'event' || /^event\s*\d+$/i.test(raw) || /^event\s*\(\d+\)$/i.test(raw) || /^event\b.*other/i.test(raw)) {
+          return 'event';
+        }
+        return (raw || '').trim();
+      };
+
+      // Normalize 'Email' header variants like 'Email Address', 'Email', etc.
+      const normalizeEmailHeader = (raw: string) => {
+        const h = (raw || '').trim().toLowerCase();
+        if (h === 'email' || h.startsWith('email')) {
+          return 'email';
+        }
+        return (raw || '').trim();
+      };
+
+      const tsIdx = headerIndex('Timestamp');
+      const emailIdx = headers.map((h) => normalizeEmailHeader(h)).indexOf('email');
+      const lastIdx = headerIndex('Last Name');
+      const firstIdx = headerIndex('First Name');
+      const reasonIdx = headerIndex('Reason');
+      const eventIdx = headers.map((h) => normalizeEventHeader(h)).indexOf('event');
+
+      if (eventIdx < 0 || emailIdx < 0) {
+        Log.warn('Excusals responses missing required headers (Event/Email); cannot backfill.');
+        return;
+      }
+
+      // Build existing key set from Excusals Backend to avoid duplicates.
+      const backendSheet = Config.getBackendSheet('Excusals Backend');
+      const backendLastCol = backendSheet.getLastColumn();
+      const backendHeaders = backendLastCol
+        ? backendSheet.getRange(1, 1, 1, backendLastCol).getValues()[0].map((h) => String(h || '').trim().toLowerCase())
+        : [];
+      const backend = SheetUtils.readTable(backendSheet);
+      const emailColB = backendHeaders.indexOf('email');
+      const eventColB = backendHeaders.indexOf('event');
+      const submittedColB = backendHeaders.indexOf('submitted_at');
+      const existingKeys = new Set<string>();
+      backend.rows.forEach((row) => {
+        const e = String(row['email'] || '').toLowerCase().trim();
+        const ev = String(row['event'] || '').trim();
+        const ts = String(row['submitted_at'] || '').trim();
+        if (e && ev && ts) existingKeys.add(`${e}|${ev}|${ts}`);
+      });
+
+      const toAppend: Record<string, any>[] = [];
+      const toSync: Record<string, any>[] = [];
+
+      // Helper: lookup cadet by email from Directory Backend
+      const lookupCadetByEmail = (addr: string) => {
+        const backendId = Config.getBackendId();
+        if (!backendId || !addr) return null;
+        const directorySheet = SheetUtils.getSheet(backendId, 'Directory Backend');
+        if (!directorySheet) return null;
+        const data = SheetUtils.readTable(directorySheet);
+        const lower = addr.toLowerCase();
+        return data.rows.find((r) => String(r['email'] || '').toLowerCase() === lower) || null;
+      };
+
+      const values = respSheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+      values.forEach((row) => {
+        const email = emailIdx >= 0 ? String(row[emailIdx] || '').trim() : '';
+        const lastName = lastIdx >= 0 ? String(row[lastIdx] || '').trim() : '';
+        const firstName = firstIdx >= 0 ? String(row[firstIdx] || '').trim() : '';
+        const reason = reasonIdx >= 0 ? String(row[reasonIdx] || '').trim() : '';
+        const tsVal = tsIdx >= 0 ? row[tsIdx] : '';
+        const submittedAt = (() => {
+          try { return new Date(tsVal).toISOString(); } catch { return new Date().toISOString(); }
+        })();
+
+        const eventsRaw = String(row[eventIdx] || '').trim();
+        const events = eventsRaw
+          .split(',')
+          .map((ev) => ev.trim())
+          .filter(Boolean);
+
+        if (!email || !events.length) return;
+
+        const cadet = lookupCadetByEmail(email);
+
+        events.forEach((eventName) => {
+          const key = `${email.toLowerCase()}|${eventName}|${submittedAt}`;
+          if (existingKeys.has(key)) return;
+
+          const requestId = `exc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+          const backendRow = {
+            request_id: requestId,
+            event: eventName,
+            email,
+            last_name: cadet?.last_name || lastName,
+            first_name: cadet?.first_name || firstName,
+            flight: cadet?.flight || '',
+            squadron: cadet?.squadron || '',
+            status: 'Pending',
+            decision: '',
+            decided_by: '',
+            decided_at: '',
+            attendance_effect: '',
+            submitted_at: submittedAt,
+            last_updated_at: submittedAt,
+            notes: reason,
+          };
+
+          toAppend.push(backendRow);
+          toSync.push(backendRow);
+        });
+      });
+
+      if (!toAppend.length) {
+        Log.info('No unprocessed excusals responses found.');
+        return;
+      }
+
+      SheetUtils.appendRows(backendSheet, toAppend);
+      toSync.forEach((row) => {
+        ExcusalsService.notifySquadronCommanderOfNewExcusal(row);
+        ExcusalsService.syncExcusalToManagementPanel(row);
+      });
+
+      Log.info(`Processed excusals form backlog: appended ${toAppend.length} event rows.`);
+    } catch (err) {
+      Log.warn(`Failed to process excusals form backlog: ${err}`);
     }
   }
 
@@ -1024,6 +1207,14 @@ namespace SetupService {
     }
   }
 
+  function ensureTimeTrigger(handlerName: string, weekDay: GoogleAppsScript.Base.Weekday, hour: number) {
+    const triggers = ScriptApp.getProjectTriggers();
+    const exists = triggers.some((t) => t.getHandlerFunction() === handlerName && t.getTriggerSource() === ScriptApp.TriggerSource.CLOCK);
+    if (exists) return;
+    Log.info(`Creating time trigger handler=${handlerName} day=${weekDay} hour=${hour}`);
+    ScriptApp.newTrigger(handlerName).timeBased().onWeekDay(weekDay).atHour(hour).create();
+  }
+
   // Deletes all installable triggers, then reinstalls the canonical SHAMROCK triggers for forms and spreadsheets.
   export function reinstallAllTriggers() {
     Log.info('Reinstalling all installable triggers');
@@ -1059,6 +1250,11 @@ namespace SetupService {
 
     if (directoryFormId) ensureFormTrigger('onDirectoryFormSubmit', directoryFormId);
     else Log.warn('Cannot reinstall directory form trigger: DIRECTORY_FORM_ID missing. Run setup first.');
+
+    // Time-driven reminders
+    ensureTimeTrigger('sendWeeklyMandoExcusedSummary', ScriptApp.WeekDay.THURSDAY, 5);
+    ensureTimeTrigger('sendWeeklyLlabExcusedSummary', ScriptApp.WeekDay.TUESDAY, 12);
+    ensureTimeTrigger('sendWeeklyUnexcusedSummary', ScriptApp.WeekDay.SUNDAY, 19);
   }
 
   function removeDefaultSheetIfPresent(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet, allowedNames: Set<string>) {
@@ -1522,6 +1718,14 @@ namespace SetupService {
     const backend = ensureSpreadsheet('backend', Config.RESOURCE_NAMES.BACKEND_SPREADSHEET, Config.PROPERTY_KEYS.BACKEND_SHEET_ID);
     spreadsheetResults.push(frontend, backend);
 
+    // Ensure excusals management spreadsheet.
+    try {
+      ExcusalsService.ensureManagementSpreadsheet();
+      ExcusalsService.shareAndProtectManagementSpreadsheet();
+    } catch (err) {
+      Log.warn(`Failed to ensure excusals management spreadsheet: ${err}`);
+    }
+
     // Ensure frontend sheets.
     const frontendSheet = SpreadsheetApp.openById(frontend.id);
     Schemas.FRONTEND_TABS.forEach((tab) => {
@@ -1562,7 +1766,7 @@ namespace SetupService {
 
     // Ensure form submit triggers for receipts/processing.
     ensureFormTrigger('onAttendanceFormSubmit', attendanceForm.id);
-    ensureFormTrigger('onExcusalFormSubmit', excusalForm.id);
+    ensureFormTrigger('onExcusalsFormSubmit', excusalForm.id);
     ensureFormTrigger('onDirectoryFormSubmit', directoryForm.id);
 
     // Refresh Data Legend from canonical arrays and sync to frontend.

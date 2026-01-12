@@ -274,19 +274,6 @@ namespace FrontendEditService {
     if (newValue === oldValue) return;
 
     const backendId = Config.getBackendId();
-    const backendSheet = SheetUtils.getSheet(backendId, 'Attendance Matrix Backend');
-    if (backendSheet) {
-      try {
-        const backendHeaderRow = backendSheet.getRange(1, 1, 1, backendSheet.getLastColumn()).getValues()[0].map((h) => String(h || '').trim());
-        const backendCol = backendHeaderRow.findIndex((h) => h.toLowerCase() === header.toLowerCase()) + 1;
-        if (backendCol > 0) {
-          backendSheet.getRange(row, backendCol).setValue(newValue);
-        }
-      } catch (err) {
-        Log.warn(`Unable to mirror attendance edit to backend: ${err}`);
-      }
-    }
-
     // Append to Attendance Backend log as an admin submission reflecting the edit.
     try {
       const logSheet = SheetUtils.getSheet(backendId, 'Attendance Backend');
@@ -297,7 +284,8 @@ namespace FrontendEditService {
         rowObj['submission_id'] = Utilities.getUuid();
         rowObj['submitted_at'] = new Date();
         rowObj['event'] = header;
-        rowObj['attendance_type'] = newValue || 'P';
+        // Preserve explicit clears; do NOT default to P
+        rowObj['attendance_type'] = newValue;
         rowObj['email'] = actorEmail() || 'unknown';
         rowObj['name'] = 'Admin';
         rowObj['flight'] = '';
@@ -306,6 +294,9 @@ namespace FrontendEditService {
         const values = logHeaders.map((h) => rowObj[h] ?? '');
         const nextRow = Math.max(3, logSheet.getLastRow() + 1);
         logSheet.getRange(nextRow, 1, 1, logHeaders.length).setValues([values]);
+
+        // Incrementally apply the change to backend/front matrices (no full rebuild).
+        AttendanceService.applyAttendanceLogEntry(rowObj);
       }
     } catch (err) {
       Log.warn(`Unable to append attendance edit log: ${err}`);

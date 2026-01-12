@@ -56,6 +56,10 @@ function addShamrockMenu() {
         .addItem('Rebuild Attendance Matrix (backend log -> frontend matrix)', 'rebuildAttendanceMatrix')
         .addItem('Rebuild Attendance Form (events -> form choices)', 'rebuildAttendanceForm')
         .addItem('Refresh Excusals Form (events -> form choices)', 'refreshExcusalsForm')
+        .addItem('Setup Excusals Management Spreadsheet', 'setupExcusalsManagementSpreadsheet')
+        .addItem('Share Excusals Management Spreadsheet', 'shareExcusalsManagementSpreadsheet')
+        .addItem('Reinitialize Excusals Management Sheets', 'reinitializeExcusalsManagementSheets')
+        .addItem('Process Excusals Form Backlog', 'processExcusalsFormBacklog')
         .addItem('Prune Attendance Response Duplicates', 'pruneAttendanceResponseColumns')
         .addItem('Prune Excusals Response Duplicates', 'pruneExcusalsResponseColumns')
         .addSeparator()
@@ -187,6 +191,18 @@ function rebuildAttendanceMatrix() {
   SetupService.rebuildAttendanceMatrix();
 }
 
+function sendWeeklyMandoExcusedSummary() {
+  AttendanceService.sendWeeklyMandoExcusedSummary();
+}
+
+function sendWeeklyLlabExcusedSummary() {
+  AttendanceService.sendWeeklyLlabExcusedSummary();
+}
+
+function sendWeeklyUnexcusedSummary() {
+  AttendanceService.fillUnexcusedAndNotify();
+}
+
 function rebuildAttendanceForm() {
   SetupService.rebuildAttendanceForm();
 }
@@ -237,6 +253,44 @@ function pruneExcusalsResponseColumns() {
 
 function refreshExcusalsForm() {
   SetupService.refreshExcusalsForm();
+}
+
+function processExcusalsFormBacklog() {
+  SetupService.processExcusalsFormBacklog();
+}
+
+function setupExcusalsManagementSpreadsheet() {
+  try {
+    const managementId = ExcusalsService.ensureManagementSpreadsheet();
+    ExcusalsService.shareAndProtectManagementSpreadsheet();
+    const url = `https://docs.google.com/spreadsheets/d/${managementId}`;
+    SpreadsheetApp.getUi().alert(`Excusals management spreadsheet ready and shared:\n${url}`);
+  } catch (err) {
+    SpreadsheetApp.getUi().alert(`Failed to set up management spreadsheet: ${err}`);
+  }
+}
+
+function shareExcusalsManagementSpreadsheet() {
+  try {
+    ExcusalsService.shareAndProtectManagementSpreadsheet();
+    const managementId = Config.scriptProperties().getProperty('EXCUSALS_MANAGEMENT_SHEET_ID');
+    const url = managementId ? `https://docs.google.com/spreadsheets/d/${managementId}` : 'N/A';
+    SpreadsheetApp.getUi().alert(`Excusals management spreadsheet shared with commanders and protected:\n${url}`);
+  } catch (err) {
+    SpreadsheetApp.getUi().alert(`Failed to share management spreadsheet: ${err}`);
+  }
+}
+
+function reinitializeExcusalsManagementSheets() {
+  try {
+    ExcusalsService.ensureManagementSpreadsheet();
+    ExcusalsService.shareAndProtectManagementSpreadsheet();
+    const managementId = Config.scriptProperties().getProperty('EXCUSALS_MANAGEMENT_SHEET_ID');
+    const url = managementId ? `https://docs.google.com/spreadsheets/d/${managementId}` : 'N/A';
+    SpreadsheetApp.getUi().alert(`Excusals management sheets reinitialized and protected:\n${url}`);
+  } catch (err) {
+    SpreadsheetApp.getUi().alert(`Failed to reinitialize management sheets: ${err}`);
+  }
 }
 
 function debugExcusalsResponseColumnsVerbose() {
@@ -463,7 +517,7 @@ function onFrontendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
   FrontendEditService.onEdit(e);
 }
 
-// Installable onEdit for backend spreadsheet: resync directory when backend changes.
+// Installable onEdit for backend spreadsheet: resync directory when backend changes, handle excusals decisions.
 function onBackendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
   if (PauseService.isPaused()) {
     Log.info('Automation paused; skipping onBackendEdit processing.');
@@ -473,9 +527,16 @@ function onBackendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
   try {
     const sheet = e?.range?.getSheet();
     if (!sheet) return;
+    const sheetName = sheet.getName();
+
+    // Handle Excusals Backend edits (decision workflow) early and return
+    if (sheetName === 'Excusals Backend') {
+      ExcusalsService.handleExcusalsBackendEdit(e);
+      return;
+    }
+
     const range = e?.range;
     if (range) {
-      const sheetName = sheet.getName();
       const notation = range.getA1Notation();
       const oldVal = String((e as any)?.oldValue ?? '').substring(0, 50);
       const newVal = String((e as any)?.value ?? range.getValue() ?? '').substring(0, 50);
@@ -489,7 +550,6 @@ function onBackendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
         const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map((h) => String(h || '').trim());
         const header = headers[col - 1] || '';
         const rowValues = sheet.getRange(row, 1, 1, headers.length).getValues()[0];
-        const sheetName = sheet.getName();
         const normalize = (v: any) => String(v || '').toLowerCase();
         let targetKey = `${sheetName}!R${row}C${col}`;
         if (sheetName === 'Directory Backend') {
@@ -523,31 +583,30 @@ function onBackendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
       Log.warn(`Backend audit logging failed: ${err}`);
     }
 
-    const name = sheet.getName();
-    if (name === 'Directory Backend') {
+    if (sheetName === 'Directory Backend') {
       SetupService.syncDirectoryFrontend();
       return;
     }
 
-    if (name === 'Data Legend') {
+    if (sheetName === 'Data Legend') {
       SyncService.syncByBackendSheetName('Data Legend');
       SetupService.applyFrontendFormatting();
       return;
     }
 
-    if (name === 'Events Backend') {
+    if (sheetName === 'Events Backend') {
       SetupService.refreshEventsArtifacts();
       return;
     }
 
-    if (name === 'Attendance Backend') {
+    if (sheetName === 'Attendance Backend') {
       SetupService.rebuildAttendanceMatrix();
       SetupService.applyAttendanceBackendFormattingPublic();
       return;
     }
 
     // Sync other mapped tables when edited.
-    SyncService.syncByBackendSheetName(name);
+    SyncService.syncByBackendSheetName(sheetName);
   } catch (err) {
     Log.warn(`onBackendEdit failed: ${err}`);
   }

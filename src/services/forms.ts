@@ -104,16 +104,20 @@ namespace FormService {
           groups.nonAbroadByAs[as].push(label);
         }
 
+        const uniLc = university.toLowerCase();
+        const isCrosstown = !isAbroad && (uniLc.includes('trine') || uniLc.includes('valparaiso'));
+
         if (flight) {
           groups.byFlight[flight] = groups.byFlight[flight] || {};
           groups.byFlight[flight][as] = groups.byFlight[flight][as] || [];
-          if (!isAbroad) {
+          // Exclude crosstown cadets from byFlight (they go to byCrosstown for Mando)
+          if (!isAbroad && !isCrosstown) {
             groups.byFlight[flight][as].push(label);
           }
         }
 
-        const uniLc = university.toLowerCase();
-        if (!isAbroad && (uniLc.includes('trine') || uniLc.includes('valparaiso'))) {
+        // Add crosstown cadets to byCrosstown for Mando branch
+        if (isCrosstown) {
           groups.byCrosstown[university] = groups.byCrosstown[university] || {};
           groups.byCrosstown[university][as] = groups.byCrosstown[university][as] || [];
           groups.byCrosstown[university][as].push(label);

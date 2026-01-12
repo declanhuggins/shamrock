@@ -209,6 +209,85 @@ namespace AttendanceService {
     return rows;
   }
 
+  function appendAttendanceLogs(logs: Record<string, any>[]) {
+    if (!logs.length) return;
+    const backendId = Config.getBackendId();
+    if (!backendId) return;
+    const sheet = SheetUtils.getSheet(backendId, 'Attendance Backend');
+    if (!sheet) return;
+    SheetUtils.appendRows(sheet, logs);
+  }
+
+  /**
+   * Apply a single attendance backend log entry to the Attendance Matrix Backend (and mirror to frontend).
+   * This lets us process new submissions incrementally without a full rebuild.
+   */
+  export function applyAttendanceLogEntry(entry: Record<string, any>): boolean {
+    const backendId = Config.getBackendId();
+    const frontendId = Config.getFrontendId();
+    if (!backendId) return false;
+
+    const matrixSheet = SheetUtils.getSheet(backendId, 'Attendance Matrix Backend');
+    if (!matrixSheet) return false;
+
+    const lastRow = matrixSheet.getLastRow();
+    const lastCol = matrixSheet.getLastColumn();
+    if (lastRow < 3 || lastCol < 1) return false;
+
+    const headers = matrixSheet
+      .getRange(1, 1, 1, lastCol)
+      .getValues()[0]
+      .map((h) => String(h || '').trim());
+
+    const eventName = String(entry['event'] || '').trim();
+    const code = String(entry['attendance_type'] ?? '').trim();
+    if (!eventName) return false;
+
+    const eventColIdx = headers.indexOf(eventName);
+    const lastIdx = headers.indexOf(ATT_HEADER_LAST);
+    const firstIdx = headers.indexOf(ATT_HEADER_FIRST);
+    if (eventColIdx < 0 || lastIdx < 0 || firstIdx < 0) return false;
+
+    const data = matrixSheet.getRange(3, 1, lastRow - 2, lastCol).getValues();
+
+    // Build cadet lookup for quick row resolution
+    const keyToIndex = new Map<string, number>();
+    data.forEach((r, idx) => {
+      const key = cadetKey({
+        last_name: r[lastIdx],
+        first_name: r[firstIdx],
+      });
+      keyToIndex.set(key, idx);
+    });
+
+    const cadets = parseCadetEntries(String(entry['cadets'] || ''));
+    if (!cadets.length) return false;
+
+    cadets.forEach((c) => {
+      const idx = keyToIndex.get(buildKey(c.last, c.first));
+      if (idx === undefined) return;
+      data[idx][eventColIdx] = code; // allow blank to clear
+    });
+
+    // Write back only the affected event column for efficiency
+    const colValues = data.map((row) => [row[eventColIdx]]);
+    matrixSheet.getRange(3, eventColIdx + 1, colValues.length, 1).setValues(colValues);
+
+    // Mirror to frontend matrix if available
+    if (frontendId) {
+      const frontendSheet = SheetUtils.getSheet(frontendId, 'Attendance');
+      if (frontendSheet) {
+        try {
+          frontendSheet.getRange(3, eventColIdx + 1, colValues.length, 1).setValues(colValues);
+        } catch (err) {
+          Log.warn(`Failed to mirror attendance to frontend: ${err}`);
+        }
+      }
+    }
+
+    return true;
+  }
+
   function writeMatrix(sheet: GoogleAppsScript.Spreadsheet.Sheet, events: EventDef[], rows: any[]) {
     const machineHeaders = [...ATTENDANCE_MACHINE_HEADERS, ...events.map((e) => e.name)];
     const displayHeaders = [...ATTENDANCE_DISPLAY_HEADERS, ...events.map((e) => e.name)];
@@ -217,10 +296,42 @@ namespace AttendanceService {
     if (machineHeaders.length) sheet.getRange(1, 1, 1, machineHeaders.length).setValues([machineHeaders]);
     if (displayHeaders.length) sheet.getRange(2, 1, 1, displayHeaders.length).setValues([displayHeaders]);
     if (rows.length) {
-      const data = rows.map((r) => machineHeaders.map((h) => (r as any)[h] ?? ''));
+      const sortedRows = sortAttendanceRows(rows);
+      const data = sortedRows.map((r) => machineHeaders.map((h) => (r as any)[h] ?? ''));
       sheet.getRange(3, 1, data.length, machineHeaders.length).setValues(data);
-      applyAttendanceFormulas(sheet, rows.length, machineHeaders, baseLength);
+      // Trim excess rows to avoid accumulating blank tails
+      const neededRows = Math.max(3, data.length + 2); // 2 header rows + data
+      const currentMax = sheet.getMaxRows();
+      if (currentMax > neededRows) {
+        sheet.deleteRows(neededRows + 1, currentMax - neededRows);
+      } else if (currentMax < neededRows) {
+        sheet.insertRowsAfter(currentMax, neededRows - currentMax);
+      }
+
+      applyAttendanceFormulas(sheet, data.length, machineHeaders, baseLength);
     }
+  }
+
+  function sortAttendanceRows(rows: any[]): any[] {
+    const asPriority = (() => {
+      const arr = Arrays.AS_YEARS;
+      const base = arr && arr.length ? arr.slice().reverse() : ['AS900', 'AS800', 'AS700', 'AS500', 'AS400', 'AS300', 'AS250', 'AS200', 'AS150', 'AS100'];
+      const map = new Map<string, number>();
+      base.forEach((v, idx) => map.set(String(v), base.length - idx));
+      return map;
+    })();
+
+    const rank = (asYear: string): number => asPriority.get(String(asYear || '').trim()) || 0;
+
+    return rows.slice().sort((a, b) => {
+      const aRank = rank(a['as_year']);
+      const bRank = rank(b['as_year']);
+      if (aRank !== bRank) return aRank > bRank ? -1 : 1; // higher AS rank first (Z->A)
+
+      const lastCmp = String(a[ATT_HEADER_LAST] || '').localeCompare(String(b[ATT_HEADER_LAST] || ''), undefined, { sensitivity: 'base' });
+      if (lastCmp !== 0) return lastCmp;
+      return String(a[ATT_HEADER_FIRST] || '').localeCompare(String(b[ATT_HEADER_FIRST] || ''), undefined, { sensitivity: 'base' });
+    });
   }
 
   export function rebuildMatrix() {
@@ -236,5 +347,330 @@ namespace AttendanceService {
 
     if (backendSheet) writeMatrix(backendSheet, events, matrixRows);
     if (frontendSheet) writeMatrix(frontendSheet, events, matrixRows);
+  }
+
+  // Training week runs Sunday -> Saturday
+  function startOfWeek(date: Date): Date {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const day = d.getDay(); // Sunday = 0
+    d.setDate(d.getDate() - day);
+    return d;
+  }
+
+  function findEventForWeek(eventType: 'mando' | 'llab', now: Date) {
+    const backendId = Config.getBackendId();
+    const sheet = SheetUtils.getSheet(backendId, 'Events Backend');
+    if (!sheet) return null;
+
+    const table = SheetUtils.readTable(sheet);
+    const weekStart = startOfWeek(now);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 7);
+
+    const targetKey = eventType === 'mando' ? 'mando' : 'llab';
+    const matches: any[] = [];
+    table.rows.forEach((row) => {
+      const type = String(row['event_type'] || '').toLowerCase();
+      const startRaw = row['start_datetime'];
+      if (!startRaw) return;
+      const start = new Date(startRaw);
+      if (Number.isNaN(start.getTime())) return;
+      if (start < weekStart || start >= weekEnd) return;
+      if (!type.includes(targetKey)) return;
+      matches.push({ row, start });
+    });
+
+    if (!matches.length) return null;
+
+    matches.sort((a, b) => a.start.getTime() - b.start.getTime());
+    const chosen = matches[0].row;
+    const colName = chosen['display_name'] || chosen['attendance_column_label'] || chosen['event_id'] || '';
+    if (!colName) return null;
+    return { row: chosen, colName, start: matches[0].start };
+  }
+
+  function formatDateTime(date: Date): string {
+    const tz = Session.getScriptTimeZone ? Session.getScriptTimeZone() : 'America/Chicago';
+    return Utilities.formatDate(date, tz, 'EEE, MMM d h:mm a');
+  }
+
+  function isExcusedCode(code: string): boolean {
+    const c = code.trim().toUpperCase();
+    if (!c) return false;
+    if (c === 'ED' || c === 'ER' || c === 'P') return false;
+    if (c.startsWith('E')) return true; // E, ES
+    if (c.startsWith('MU') || c.startsWith('MRS')) return true;
+    return false;
+  }
+
+  function greetingForRecipient(lastName: string): string {
+    const hours = new Date().getHours();
+    const timeGreeting = hours < 12 ? 'Good morning' : hours < 18 ? 'Good afternoon' : 'Good evening';
+    const name = lastName ? `C/${lastName}` : 'Sir/Ma’am';
+    return `${timeGreeting} ${name},`;
+  }
+
+  const EMAIL_SIGNATURE = 'Very respectfully,\nSHAMROCK Automations';
+
+  function getFlightCommanderEmail(flight: string): string {
+    const backendId = Config.getBackendId();
+    if (!backendId) return '';
+    const leadershipSheet = SheetUtils.getSheet(backendId, 'Leadership Backend');
+    if (!leadershipSheet) return '';
+    const table = SheetUtils.readTable(leadershipSheet);
+    const target = flight.toLowerCase().trim();
+    const commander = table.rows.find((row) => {
+      const role = String(row['role'] || '').toLowerCase();
+      const rowFlight = String((row as any)['flight'] || '').toLowerCase().trim();
+      const roleIncludesFlight = Arrays.FLIGHTS.some((f) => role.includes(f.toLowerCase()) && target === f.toLowerCase());
+      const matchesFlight = rowFlight ? rowFlight === target : roleIncludesFlight;
+      return role.includes('flight commander') && matchesFlight;
+    });
+    return commander ? String(commander['email'] || '').trim() : '';
+  }
+
+  function sendExcusedSummaryEmails(eventType: 'mando' | 'llab') {
+    const backendId = Config.getBackendId();
+    if (!backendId) {
+      Log.warn('Cannot send excused summary: backend ID missing');
+      return;
+    }
+
+    const eventInfo = findEventForWeek(eventType, new Date());
+    if (!eventInfo) {
+      Log.warn(`No ${eventType} event found for this week; skipping excused summary email.`);
+      return;
+    }
+
+    const matrixSheet = SheetUtils.getSheet(backendId, 'Attendance Matrix Backend');
+    if (!matrixSheet) {
+      Log.warn('Attendance Matrix Backend not found; cannot send excused summary');
+      return;
+    }
+
+    const headers = matrixSheet
+      .getRange(1, 1, 1, matrixSheet.getLastColumn())
+      .getValues()[0]
+      .map((h) => String(h || '').trim());
+    const eventColIdx = headers.indexOf(eventInfo.colName);
+    if (eventColIdx < 0) {
+      Log.warn(`Event column '${eventInfo.colName}' not found in Attendance Matrix; skipping excused summary.`);
+      return;
+    }
+
+    const table = SheetUtils.readTable(matrixSheet);
+    const excusedByFlight = new Map<string, { last: string; first: string; asYear: string }[]>();
+
+    table.rows.forEach((row) => {
+      const code = String((row as any)[eventInfo.colName] || '');
+      if (!isExcusedCode(code)) return;
+      const flight = String((row as any)['flight'] || '').trim();
+      if (!flight) return;
+      const list = excusedByFlight.get(flight) || [];
+      list.push({
+        last: String((row as any)['last_name'] || ''),
+        first: String((row as any)['first_name'] || ''),
+        asYear: String((row as any)['as_year'] || ''),
+      });
+      excusedByFlight.set(flight, list);
+    });
+
+    const friendly = eventType === 'mando' ? 'Mando PT' : 'LLAB';
+    const eventLabel = eventInfo.row['display_name'] || eventInfo.row['attendance_column_label'] || eventInfo.row['event_id'];
+    const startStr = eventInfo.start ? formatDateTime(eventInfo.start) : 'this week';
+
+    excusedByFlight.forEach((cadets, flight) => {
+      const commanderEmail = getFlightCommanderEmail(flight);
+      if (!commanderEmail) {
+        Log.warn(`Cannot notify ${flight} flight: commander email not found`);
+        return;
+      }
+
+      const commanderRow = SheetUtils.lookupRowByEmail(Config.getBackendId(), 'Leadership Backend', commanderEmail);
+      const commanderLast = String((commanderRow as any)?.['last_name'] || '');
+      const greeting = greetingForRecipient(commanderLast);
+
+      const lines = cadets
+        .map((c) => `${c.last}, ${c.first} (${c.asYear || 'AS?'})`)
+        .sort();
+      const hasCadets = lines.length > 0;
+      const body = hasCadets
+        ? `${greeting}\n\nExcused cadets for ${friendly} this week (${eventLabel}, ${startStr}):\n- ${lines.join('\n- ')}\n\nIf a cadet will attend despite being excused, coordinate directly.\n\n${EMAIL_SIGNATURE}`
+        : `${greeting}\n\nNo cadets are excused for ${friendly} this week (${eventLabel}). All cadets are expected to be present.\n\n${EMAIL_SIGNATURE}`;
+
+      const subject = `Excused cadets for ${friendly} (${eventLabel})`;
+      try {
+        GmailApp.sendEmail(commanderEmail, subject, body, {
+          name: 'SHAMROCK Automations',
+        });
+        Log.info(`Sent ${friendly} excused summary to ${commanderEmail} for flight ${flight}`);
+      } catch (err) {
+        Log.warn(`Failed to send ${friendly} excused summary to ${commanderEmail}: ${err}`);
+      }
+    });
+  }
+
+  export function sendWeeklyMandoExcusedSummary() {
+    sendExcusedSummaryEmails('mando');
+  }
+
+  export function sendWeeklyLlabExcusedSummary() {
+    sendExcusedSummaryEmails('llab');
+  }
+
+  export function fillUnexcusedAndNotify() {
+    const backendId = Config.getBackendId();
+    if (!backendId) {
+      Log.warn('Cannot fill unexcused: backend ID missing');
+      return;
+    }
+
+    const matrixSheet = SheetUtils.getSheet(backendId, 'Attendance Matrix Backend');
+    if (!matrixSheet) {
+      Log.warn('Attendance Matrix Backend not found; cannot fill unexcused');
+      return;
+    }
+
+    const lastRow = matrixSheet.getLastRow();
+    const lastCol = matrixSheet.getLastColumn();
+    if (lastRow < 3 || lastCol < 1) return;
+
+    const headers = matrixSheet.getRange(1, 1, 1, lastCol).getValues()[0].map((h) => String(h || '').trim());
+    const baseHeaderIdx = {
+      last: headers.indexOf('last_name'),
+      first: headers.indexOf('first_name'),
+      asYear: headers.indexOf('as_year'),
+      flight: headers.indexOf('flight'),
+    };
+
+    const today = new Date();
+    const weekStart = startOfWeek(today);
+    const lastWeekStart = new Date(weekStart);
+    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+    const weekEnd = new Date(lastWeekStart);
+    weekEnd.setDate(lastWeekStart.getDate() + 7);
+
+    // Find event columns occurring this training week
+    const backendEvents = SheetUtils.getSheet(backendId, 'Events Backend');
+    if (!backendEvents) return;
+    const eventsTable = SheetUtils.readTable(backendEvents);
+    const weekEventNames = new Set<string>();
+    eventsTable.rows.forEach((row) => {
+      const startRaw = row['start_datetime'];
+      if (!startRaw) return;
+      const start = new Date(startRaw);
+      if (Number.isNaN(start.getTime())) return;
+      if (start < lastWeekStart || start >= weekEnd) return;
+      const name = row['display_name'] || row['attendance_column_label'] || row['event_id'];
+      if (name) weekEventNames.add(String(name));
+    });
+    if (weekEventNames.size === 0) {
+      Log.warn('No events found for this training week; skipping unexcused fill.');
+      return;
+    }
+
+    const eventColIndexes = headers
+      .map((h, idx) => ({ h, idx }))
+      .filter((p) => weekEventNames.has(p.h))
+      .map((p) => p.idx);
+
+    if (eventColIndexes.length === 0) {
+      Log.warn('No matching event columns in Attendance Matrix for this week; skipping unexcused fill.');
+      return;
+    }
+
+    const data = matrixSheet.getRange(3, 1, lastRow - 2, lastCol).getValues();
+    const unexcusedByFlight = new Map<string, { last: string; first: string; asYear: string; event: string }[]>();
+    const pendingLogs: Record<string, any>[] = [];
+
+    eventColIndexes.forEach((colIdx) => {
+      const colOffset = colIdx; // zero-based in array, but range uses 1-based later
+      for (let r = 0; r < data.length; r++) {
+        const cell = String(data[r][colOffset] || '').trim();
+        if (cell && cell !== 'ED') continue; // Only fill if empty or ED (Excusal Denied)
+        
+        if (!cell) {
+          // Empty cell -> U
+          data[r][colOffset] = 'U';
+        } else if (cell === 'ED') {
+          // Excusal Denied -> U
+          data[r][colOffset] = 'U';
+        } else {
+          continue;
+        }
+
+        // Queue a log entry for this fill so rebuilds stay consistent
+        pendingLogs.push({
+          submission_id: `fill-u-${Date.now()}-${r}-${colIdx}`,
+          submitted_at: new Date(),
+          event: headers[colIdx] || '',
+          attendance_type: 'U',
+          email: 'auto-unexcused',
+          name: 'Weekly Unexcused Fill',
+          flight: baseHeaderIdx.flight >= 0 ? String(data[r][baseHeaderIdx.flight] || '') : '',
+          cadets:
+            (baseHeaderIdx.last >= 0 ? String(data[r][baseHeaderIdx.last] || '') : '') +
+            ', ' +
+            (baseHeaderIdx.first >= 0 ? String(data[r][baseHeaderIdx.first] || '') : ''),
+        });
+        
+        const flight = baseHeaderIdx.flight >= 0 ? String(data[r][baseHeaderIdx.flight] || '').trim() : '';
+        if (!flight) continue;
+        const list = unexcusedByFlight.get(flight) || [];
+        list.push({
+          last: baseHeaderIdx.last >= 0 ? String(data[r][baseHeaderIdx.last] || '') : '',
+          first: baseHeaderIdx.first >= 0 ? String(data[r][baseHeaderIdx.first] || '') : '',
+          asYear: baseHeaderIdx.asYear >= 0 ? String(data[r][baseHeaderIdx.asYear] || '') : '',
+          event: headers[colIdx] || '',
+        });
+        unexcusedByFlight.set(flight, list);
+      }
+    });
+
+    // Apply log entries and write back only the event columns we mutated to preserve formulas elsewhere
+    if (pendingLogs.length) {
+      appendAttendanceLogs(pendingLogs);
+      pendingLogs.forEach((log) => applyAttendanceLogEntry(log));
+    } else {
+      eventColIndexes.forEach((colIdx) => {
+        const colValues = data.map((row) => [row[colIdx]]);
+        matrixSheet.getRange(3, colIdx + 1, colValues.length, 1).setValues(colValues);
+      });
+    }
+
+    const tz = Session.getScriptTimeZone ? Session.getScriptTimeZone() : 'America/Chicago';
+    const weekLabel = Utilities.formatDate(lastWeekStart, tz, 'MMM d');
+
+    unexcusedByFlight.forEach((items, flight) => {
+      const commanderEmail = getFlightCommanderEmail(flight);
+      if (!commanderEmail) {
+        Log.warn(`Cannot notify ${flight} flight: commander email not found`);
+        return;
+      }
+
+      const commanderRow = SheetUtils.lookupRowByEmail(backendId, 'Leadership Backend', commanderEmail);
+      const commanderLast = String((commanderRow as any)?.['last_name'] || '');
+      const greeting = greetingForRecipient(commanderLast);
+
+      const lines = items
+        .map((i) => `${i.last}, ${i.first} (${i.asYear || 'AS?'}) – ${i.event}`)
+        .sort();
+      const hasIssues = lines.length > 0;
+      const body = hasIssues
+        ? `${greeting}\n\nUnexcused attendance this week (week of ${weekLabel}):\n- ${lines.join('\n- ')}\n\nPlease address these absences with your cadets.\n\n${EMAIL_SIGNATURE}`
+        : `${greeting}\n\nYour flight has perfect attendance for this week. Well done.\n\n${EMAIL_SIGNATURE}`;
+
+      const subject = hasIssues
+        ? `Unexcused attendance – week of ${weekLabel}`
+        : `Perfect attendance – week of ${weekLabel}`;
+
+      try {
+        GmailApp.sendEmail(commanderEmail, subject, body, { name: 'SHAMROCK Automations' });
+        Log.info(`Sent weekly unexcused summary to ${commanderEmail} for flight ${flight}`);
+      } catch (err) {
+        Log.warn(`Failed to send weekly unexcused summary to ${commanderEmail}: ${err}`);
+      }
+    });
   }
 }
