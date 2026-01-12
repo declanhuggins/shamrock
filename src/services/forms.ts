@@ -104,8 +104,9 @@ namespace FormService {
           groups.nonAbroadByAs[as].push(label);
         }
 
-        const uniLc = university.toLowerCase();
-        const isCrosstown = !isAbroad && (uniLc.includes('trine') || uniLc.includes('valparaiso'));
+        const uniLc = university.toLowerCase().trim();
+        // Treat Trine and Valpo/Valparaiso as crosstown regardless of extra words
+          const isCrosstown = !isAbroad && (/trine/.test(uniLc) || /valpo|valpar/.test(uniLc));
 
         if (flight) {
           groups.byFlight[flight] = groups.byFlight[flight] || {};
