@@ -31,3 +31,6 @@ dist/
 
 # Internal Data
 data/*
+
+# Clasp
+.clasp.json

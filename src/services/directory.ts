@@ -1,0 +1,198 @@
+// Directory sync and form upsert helpers.
+
+namespace DirectoryService {
+  interface DirectoryRecord {
+    source: string;
+    last_name: string;
+    first_name: string;
+    as_year: string;
+    class_year: string;
+    flight: string;
+    squadron: string;
+    university: string;
+    email: string;
+    phone: string;
+    dorm: string;
+    home_town: string;
+    home_state: string;
+    dob: string;
+    cip_broad_area: string;
+    cip_code: string;
+    desired_assigned_afsc: string;
+    flight_path_status: string;
+    photo_link: string;
+    notes: string;
+  }
+
+  function getBackendFrontendSheets() {
+    const backendId = Config.getBackendId();
+    const frontendId = Config.getFrontendId();
+    const backendSheet = backendId ? SheetUtils.getSheet(backendId, 'Directory Backend') : null;
+    const frontendSheet = frontendId ? SheetUtils.getSheet(frontendId, 'Directory') : null;
+    return { backendSheet, frontendSheet };
+  }
+
+  function normalizePhone(raw: string): string {
+    const digits = String(raw || '').replace(/^'+/, '').replace(/\D+/g, '');
+    if (!digits) return '';
+    if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+    if (digits.length === 10) return `+1${digits}`;
+    return `+${digits}`;
+  }
+
+  function formatPhoneDisplay(phone: string): string {
+    const digits = phone.replace(/\D+/g, '');
+    if (digits.length === 11 && digits.startsWith('1')) {
+      const area = digits.slice(1, 4);
+      const prefix = digits.slice(4, 7);
+      const line = digits.slice(7, 11);
+      return `+1 (${area}) ${prefix}-${line}`;
+    }
+    return phone;
+  }
+
+  function sortDirectoryRows(rows: any[]): any[] {
+    const asPriority = (() => {
+      const arr = (globalThis as any).Arrays?.AS_YEARS as string[] | undefined;
+      const base = arr && arr.length ? arr.slice().reverse() : ['AS900', 'AS800', 'AS700', 'AS500', 'AS400', 'AS300', 'AS250', 'AS200', 'AS150', 'AS100'];
+      const map = new Map<string, number>();
+      base.forEach((v, idx) => map.set(String(v), base.length - idx));
+      return map;
+    })();
+
+    const rank = (asYear: string): number => asPriority.get(String(asYear || '').trim()) || 0;
+
+    return rows.slice().sort((a, b) => {
+      const aRank = rank(a.as_year);
+      const bRank = rank(b.as_year);
+      if (aRank !== bRank) return aRank > bRank ? -1 : 1; // higher AS rank first (Z->A)
+
+      const lastCmp = String(a.last_name || '').localeCompare(String(b.last_name || ''), undefined, { sensitivity: 'base' });
+      if (lastCmp !== 0) return lastCmp;
+      return String(a.first_name || '').localeCompare(String(b.first_name || ''), undefined, { sensitivity: 'base' });
+    });
+  }
+
+  function sanitizeCipCode(raw: string): string {
+    const cleaned = String(raw || '').split(/[,;]/)[0].trim();
+    const match = cleaned.match(/\d{2}\.\d{4}/);
+    return match ? match[0] : cleaned;
+  }
+
+  export function syncDirectoryFrontend(): void {
+    const { backendSheet, frontendSheet } = getBackendFrontendSheets();
+    if (!backendSheet || !frontendSheet) return;
+    const backend = SheetUtils.readTable(backendSheet);
+    const mapped = backend.rows.map((row) => ({
+      last_name: row['last_name'] || '',
+      first_name: row['first_name'] || '',
+      as_year: row['as_year'] || '',
+      class_year: row['class_year'] || '',
+      flight: row['flight'] || '',
+      squadron: row['squadron'] || '',
+      university: row['university'] || '',
+      email: row['email'] || '',
+      phone: formatPhoneDisplay(normalizePhone(String(row['phone'] || ''))),
+      dorm: row['dorm'] || '',
+      home_town: row['home_town'] || '',
+      home_state: row['home_state'] || '',
+      dob: row['dob'] || '',
+      cip_broad_area: row['cip_broad_area'] || '',
+      cip_code: row['cip_code'] || '',
+      desired_assigned_afsc: row['desired_assigned_afsc'] || '',
+      flight_path_status: row['flight_path_status'] || '',
+      photo_link: row['photo_link'] || '',
+      notes: row['notes'] || '',
+    }));
+
+    const sorted = sortDirectoryRows(mapped);
+    SheetUtils.writeTable(frontendSheet, sorted);
+  }
+
+  function upsertBackendRecord(record: DirectoryRecord) {
+    const { backendSheet } = getBackendFrontendSheets();
+    if (!backendSheet) return;
+    const table = SheetUtils.readTable(backendSheet);
+    const emailKey = String(record.email || '').toLowerCase();
+    let updated = false;
+    const nextRows = table.rows.map((row) => {
+      const rowEmail = String(row['email'] || '').toLowerCase();
+      if (emailKey && rowEmail === emailKey) {
+        updated = true;
+        return record;
+      }
+      return row;
+    });
+    if (!updated) {
+      nextRows.push(record);
+    }
+    SheetUtils.writeTable(backendSheet, nextRows);
+  }
+
+  function getNamedValues(e: GoogleAppsScript.Events.FormsOnFormSubmit): Record<string, string[]> {
+    return ((e as any).namedValues as Record<string, string[]>) || {};
+  }
+
+  function getFirst(namedValues: Record<string, string[]>, key: string): string {
+    const raw = namedValues[key];
+    if (!raw) return '';
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return String(arr[0] || '').trim();
+  }
+
+  export function handleDirectoryFormSubmission(e: GoogleAppsScript.Events.FormsOnFormSubmit) {
+    const nv = getNamedValues(e);
+    const respondentEmail = String(e.response.getRespondentEmail?.() || '').trim();
+    const email = respondentEmail || getFirst(nv, 'Email Address');
+
+    const record: DirectoryRecord = {
+      source: 'directory_form',
+      last_name: getFirst(nv, 'Last Name'),
+      first_name: getFirst(nv, 'First Name'),
+      as_year: getFirst(nv, 'AS Year'),
+      class_year: getFirst(nv, 'Class Year (YYYY)'),
+      flight: getFirst(nv, 'Flight'),
+      squadron: getFirst(nv, 'Squadron'),
+      university: getFirst(nv, 'University'),
+      email,
+      phone: normalizePhone(getFirst(nv, 'Phone (+5 (555) 555-5555)')),
+      dorm: getFirst(nv, 'Dorm'),
+      home_town: getFirst(nv, 'Home Town'),
+      home_state: getFirst(nv, 'Home State'),
+      dob: getFirst(nv, 'DOB (MM/DD/YYYY)'),
+      cip_broad_area: getFirst(nv, 'CIP Broad Area'),
+      cip_code: sanitizeCipCode(getFirst(nv, 'CIP Code (XX.XXXX)')),
+      desired_assigned_afsc: getFirst(nv, 'Desired/Assigned AFSC'),
+      flight_path_status: getFirst(nv, 'Flight Path Status'),
+      photo_link: getFirst(nv, 'Photo Link (URL)'),
+      notes: getFirst(nv, 'Notes'),
+    };
+
+    upsertBackendRecord(record);
+    syncDirectoryFrontend();
+  }
+
+  export function protectFrontendDirectory(frontendId: string) {
+    const sheet = Config.getFrontendSheet('Directory');
+
+    // Clear any sheet-level protections so cadet edits are not blocked.
+    (sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET) || []).forEach((p: GoogleAppsScript.Spreadsheet.Protection) => p.remove());
+
+    // Remove legacy header protections to avoid stacking.
+    const headerProtections = (sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE) || []).filter((p: GoogleAppsScript.Spreadsheet.Protection) => {
+      const r = p.getRange();
+      return r.getRow() === 1 && r.getNumRows() <= 2;
+    });
+    headerProtections.forEach((p: GoogleAppsScript.Spreadsheet.Protection) => p.remove());
+
+    // Add a warning-only protection on the header rows (machine + display) to discourage edits without blocking the sheet.
+    try {
+      const headerRange = sheet.getRange(1, 1, 2, sheet.getMaxColumns());
+      const protection = headerRange.protect();
+      protection.setDescription('Directory headers (auto)');
+      protection.setWarningOnly(true);
+    } catch (err) {
+      Log.warn(`Unable to apply Directory header protection: ${err}`);
+    }
+  }
+}
