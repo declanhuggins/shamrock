@@ -82,6 +82,7 @@ What setup auto-runs
 - Apps Script cannot create or modify Google Sheets “Formatted tables” (typed columns). If you want to use them, you must create/maintain them manually in the Sheets UI (see checklist below).
 - Attendance/Excusal form questions are placeholders; real questions will be added later.
 - The built-in Forms “email a copy of my responses” setting may not be controllable via Apps Script; if needed, a submission-trigger email receipt will be implemented.
+- Apps Script often returns a blank `getActiveUser()` for cross-domain/consumer editors. To avoid misattributing edits to the script owner, SHAMROCK does not fall back to `getEffectiveUser()`. Menu/onEdit allowlists only apply when `SHAMROCK_MENU_ALLOWED_EMAILS` is populated and the active user email is available; leave the allowlist empty if you want everyone with sheet access to see menus and have edits processed.
 
 Notes
 - Some Google Forms features (notably File upload items and certain login requirements) may not be supported by Apps Script in some environments; setup will log warnings and continue.

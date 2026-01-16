@@ -1228,13 +1228,15 @@ namespace SetupService {
       }
     });
 
-    // Recreate spreadsheet triggers (onOpen/onEdit) for frontend and backend.
+    // Recreate spreadsheet triggers (onOpen/onEdit) for frontend, backend, and excusals management.
     const frontendId = Config.getFrontendId();
     const backendId = Config.getBackendId();
+    const managementId = Config.scriptProperties().getProperty('EXCUSALS_MANAGEMENT_SHEET_ID') || '';
     ensureSpreadsheetTrigger('onFrontendOpen', frontendId, 'open');
     ensureSpreadsheetTrigger('onFrontendEdit', frontendId, 'edit');
     ensureSpreadsheetTrigger('onBackendOpen', backendId, 'open');
     ensureSpreadsheetTrigger('onBackendEdit', backendId, 'edit');
+    ensureSpreadsheetTrigger('onExcusalsManagementEdit', managementId, 'edit');
 
     // Recreate form submit triggers for attendance/excusal/directory.
     const props = Config.scriptProperties();

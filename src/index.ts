@@ -16,17 +16,18 @@ function getAllowedMenuUsers(): string[] {
 function addShamrockMenu() {
   const email = ((): string => {
     try {
-      return Session.getActiveUser().getEmail();
+      const active = Session.getActiveUser().getEmail();
+      if (active) return active;
     } catch (err) {
       Log.warn(`Unable to read active user email for menu gate: ${err}`);
-      return '';
     }
+    return '';
   })();
 
   const allowed = getAllowedMenuUsers();
   const emailLower = (email || '').toLowerCase();
 
-  if (!allowed.includes(emailLower)) {
+  if (allowed.length > 0 && !allowed.includes(emailLower)) {
     Log.warn(`Menu suppressed for user=${email || 'unknown'}; not in allowed list`);
     return;
   }
@@ -90,7 +91,8 @@ function addShamrockMenu() {
   const safeMenu = ui
     .createMenu('SAFE FUNCTIONS')
     .addItem('Add Leadership Entry', 'addLeadershipEntry')
-    .addItem('Fix Attendance Headers', 'fixAttendanceHeaders');
+    .addItem('Fix Attendance Headers', 'fixAttendanceHeaders')
+    .addItem('Fill Attendance Event (bulk)', 'fillAttendanceEventPrompt');
 
   ui
     .createMenu('SHAMROCK')
@@ -502,6 +504,130 @@ function onFrontendOpen() {
 // Installable onOpen for backend spreadsheet
 function onBackendOpen() {
   addShamrockMenu();
+}
+
+// Prompt-driven filler for attendance events with flexible selectors.
+function fillAttendanceEventPrompt() {
+  const ui = SpreadsheetApp.getUi();
+  const email = ((): string => {
+    try {
+      return Session.getActiveUser().getEmail();
+    } catch {
+      return '';
+    }
+  })();
+
+  const parseList = (raw: string, separators: RegExp = /[,|]/): string[] =>
+    raw
+      .split(separators)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+  const eventResp = ui.prompt(
+    'Fill attendance events',
+    [
+      'Select events to fill.',
+      'Examples:',
+      ' - all',
+      ' - names:TW-17 Mando|TW-17 Secondary',
+      ' - starts:TW-, ends:Secondary',
+      ' - contains:Secondary',
+      ' - TW-18 (unprefixed tokens treated as names)',
+      'Use commas or pipes to separate multiple tokens.',
+    ].join('\n'),
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (eventResp.getSelectedButton() !== ui.Button.OK) return;
+  const eventRaw = eventResp.getResponseText().trim();
+  if (!eventRaw) {
+    ui.alert('An event selector is required.');
+    return;
+  }
+
+  const eventSelector = (() => {
+    const selector = { names: [] as string[], startsWith: [] as string[], endsWith: [] as string[], contains: [] as string[], all: false };
+    const tokens = eventRaw.split(/[,|;]/).map((t) => t.trim()).filter(Boolean);
+    tokens.forEach((tok) => {
+      const tokLower = tok.toLowerCase();
+      if (tokLower === 'all' || tokLower === 'all events') {
+        selector.all = true;
+        return;
+      }
+      const [keyRaw, valRaw] = tok.includes(':') ? [tok.slice(0, tok.indexOf(':')), tok.slice(tok.indexOf(':') + 1)] : ['names', tok];
+      const key = keyRaw.trim().toLowerCase();
+      const val = valRaw.trim();
+      if (!val && key !== 'all') return;
+      if (key === 'all') selector.all = true;
+      else if (key === 'names' || key === 'name') selector.names.push(...parseList(val));
+      else if (key === 'starts' || key === 'starts_with') selector.startsWith.push(...parseList(val));
+      else if (key === 'ends' || key === 'ends_with') selector.endsWith.push(...parseList(val));
+      else if (key === 'contains') selector.contains.push(...parseList(val));
+      else selector.names.push(...parseList(tok)); // fallback as name token
+    });
+    if (!selector.all && !selector.names.length && !selector.startsWith.length && !selector.endsWith.length && !selector.contains.length) {
+      selector.names.push(eventRaw);
+    }
+    return selector;
+  })();
+
+  const cadetResp = ui.prompt(
+    'Target cadets',
+    [
+      'Select cadets (union of criteria). Leave blank for all.',
+      'Examples:',
+      ' - all',
+      ' - cadet:Doe, Jane|Smith, John',
+      ' - flight:Alpha|Bravo',
+      ' - university:Trine',
+      ' - as_year:AS300',
+      ' - abroad',
+      'Combine with commas or pipes for multiple criteria.',
+    ].join('\n'),
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (cadetResp.getSelectedButton() !== ui.Button.OK) return;
+  const cadetRaw = cadetResp.getResponseText().trim();
+
+  const cadetSelector = (() => {
+    const selector = { cadets: [] as string[], flights: [] as string[], universities: [] as string[], asYears: [] as string[], includeAbroad: false };
+    if (!cadetRaw || cadetRaw.toLowerCase() === 'all') return selector;
+    let tokens = cadetRaw.split(';').map((t) => t.trim()).filter(Boolean);
+    if (tokens.length === 1) tokens = cadetRaw.split('|').map((t) => t.trim()).filter(Boolean);
+    if (!tokens.length) tokens = [cadetRaw];
+    tokens.forEach((tok) => {
+      const [keyRaw, valRaw] = tok.includes(':') ? [tok.slice(0, tok.indexOf(':')), tok.slice(tok.indexOf(':') + 1)] : ['cadet', tok];
+      const key = keyRaw.trim().toLowerCase();
+      const val = valRaw.trim();
+      if (!val && key !== 'abroad') return;
+      if (key === 'abroad') selector.includeAbroad = true;
+      else if (key === 'cadet' || key === 'name') selector.cadets.push(...parseList(val, /[|;]/));
+      else if (key === 'flight') selector.flights.push(...parseList(val));
+      else if (key === 'university' || key === 'uni') selector.universities.push(...parseList(val));
+      else if (key === 'as_year' || key === 'asyear' || key === 'as') selector.asYears.push(...parseList(val));
+      else selector.cadets.push(...parseList(tok));
+    });
+    return selector;
+  })();
+
+  const codeResp = ui.prompt('Attendance code', 'Enter attendance code to set (e.g., N/A, P, U, E, ED, ER):', ui.ButtonSet.OK_CANCEL);
+  if (codeResp.getSelectedButton() !== ui.Button.OK) return;
+  const code = codeResp.getResponseText().trim();
+  if (!code) {
+    ui.alert('Attendance code is required.');
+    return;
+  }
+
+  try {
+    const filled = AttendanceService.fillEventColumn({ eventSelector, code, cadetSelector, actorEmail: email, actorRole: 'menu_bulk_fill' });
+    ui.alert(`Filled ${filled} cadet-event cells with code '${code}'.`);
+  } catch (err) {
+    ui.alert(`Unable to fill event: ${err}`);
+  }
+}
+
+// Installable onEdit for Excusals Management spreadsheet: mirror decisions back to backend + attendance
+function onExcusalsManagementEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
+  ExcusalsService.handleExcusalsManagementEdit(e);
 }
 
 // Installable onEdit for frontend spreadsheet: mirror allowed Directory edits back to backend with audit + propagation.

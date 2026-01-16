@@ -1,6 +1,16 @@
 // Excusals processing service: handle notifications, decisions, and management panel.
 
 namespace ExcusalsService {
+  function currentUserEmail(): string {
+    try {
+      const active = Session.getActiveUser().getEmail();
+      if (active) return active;
+    } catch (err) {
+      Log.warn(`Unable to read active user email: ${err}`);
+    }
+    return '';
+  }
+
   /**
    * Send notification email to squadron commander when new excusal submitted.
    */
@@ -467,7 +477,7 @@ SHAMROCK Automations`;
 
       // Update status and decided_at in the same row
       if (statusIdx >= 0) sheet.getRange(row, statusIdx + 1).setValue(newValue === 'Approved' ? 'Approved' : 'Denied');
-      if (decidedByIdx >= 0) sheet.getRange(row, decidedByIdx + 1).setValue(Session.getActiveUser().getEmail());
+      if (decidedByIdx >= 0) sheet.getRange(row, decidedByIdx + 1).setValue(currentUserEmail());
       if (decidedAtIdx >= 0) sheet.getRange(row, decidedAtIdx + 1).setValue(new Date().toISOString());
 
       // Update attendance matrix based on decision
@@ -497,6 +507,116 @@ SHAMROCK Automations`;
     } catch (err) {
       Log.warn(`Failed to handle Excusals Backend edit: ${err}`);
     }
+  }
+
+  /**
+   * Handle edits in the Excusals Management spreadsheet (squadron tabs) and mirror decisions to Excusals Backend.
+   */
+  export function handleExcusalsManagementEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
+    const mgmtId = Config.scriptProperties().getProperty('EXCUSALS_MANAGEMENT_SHEET_ID');
+    if (!mgmtId) return;
+
+    const range = e?.range;
+    const sheet = range?.getSheet();
+    if (!sheet || sheet.getParent().getId() !== mgmtId) return;
+
+    const row = range.getRow();
+    const col = range.getColumn();
+    const decision = String((e as any)?.value ?? range.getValue() ?? '').trim();
+
+    const decisionCol = Schemas.EXCUSALS_MANAGEMENT_SCHEMA.machineHeaders?.indexOf('decision') ?? -1;
+    const requestCol = Schemas.EXCUSALS_MANAGEMENT_SCHEMA.machineHeaders?.indexOf('request_id') ?? -1;
+    if (decisionCol < 0 || requestCol < 0) return;
+    if (row < 3 || col !== decisionCol + 1) return;
+    if (!['Approved', 'Denied'].includes(decision)) return;
+
+    const requestId = String(sheet.getRange(row, requestCol + 1).getValue() || '').trim();
+    if (!requestId) {
+      Log.warn(`Management edit ignored: missing request_id on row ${row}`);
+      return;
+    }
+
+    const backendId = Config.getBackendId();
+    const backendSheet = SheetUtils.getSheet(backendId, 'Excusals Backend');
+    if (!backendSheet) {
+      Log.warn('Excusals Backend not found; cannot mirror management decision');
+      return;
+    }
+
+    const headers = backendSheet.getRange(1, 1, 1, backendSheet.getLastColumn()).getValues()[0].map((h) => String(h || '').trim());
+    const schemaHeaders = Schemas.getTabSchema('Excusals Backend')?.machineHeaders || [];
+    const headerName = (name: string) => (schemaHeaders.includes(name) ? name : name); // prefer schema names
+    const idx = {
+      request: headers.indexOf(headerName('request_id')),
+      decision: headers.indexOf(headerName('decision')),
+      status: headers.indexOf(headerName('status')),
+      decidedBy: headers.indexOf(headerName('decided_by')),
+      decidedAt: headers.indexOf(headerName('decided_at')),
+      lastUpdated: headers.indexOf(headerName('last_updated_at')),
+      event: headers.indexOf(headerName('event')),
+      email: headers.indexOf(headerName('email')),
+      last: headers.indexOf(headerName('last_name')),
+      first: headers.indexOf(headerName('first_name')),
+      squadron: headers.indexOf(headerName('squadron')),
+      notes: headers.indexOf(headerName('notes')),
+    };
+
+    if (idx.request < 0) return;
+
+    const data = backendSheet.getRange(3, 1, backendSheet.getLastRow() - 2, headers.length).getValues();
+    let targetRow = -1;
+    for (let i = 0; i < data.length; i++) {
+      if (String(data[i][idx.request] || '').trim() === requestId) {
+        targetRow = i;
+        break;
+      }
+    }
+
+    if (targetRow < 0) {
+      Log.warn(`Request ${requestId} not found in Excusals Backend; cannot mirror decision`);
+      return;
+    }
+
+    const rowNumber = targetRow + 3; // account for two header rows
+    const oldDecision = idx.decision >= 0 ? String(data[targetRow][idx.decision] || '').trim() : '';
+    const nowIso = new Date().toISOString();
+    const activeEmail = currentUserEmail();
+
+    if (idx.status >= 0) backendSheet.getRange(rowNumber, idx.status + 1).setValue(decision);
+    if (idx.decision >= 0) backendSheet.getRange(rowNumber, idx.decision + 1).setValue(decision);
+    if (idx.decidedBy >= 0) backendSheet.getRange(rowNumber, idx.decidedBy + 1).setValue(activeEmail);
+    if (idx.decidedAt >= 0) backendSheet.getRange(rowNumber, idx.decidedAt + 1).setValue(nowIso);
+    if (idx.lastUpdated >= 0) backendSheet.getRange(rowNumber, idx.lastUpdated + 1).setValue(nowIso);
+
+    const lastName = idx.last >= 0 ? String(data[targetRow][idx.last] || '') : '';
+    const firstName = idx.first >= 0 ? String(data[targetRow][idx.first] || '') : '';
+    const eventName = idx.event >= 0 ? String(data[targetRow][idx.event] || '') : '';
+    const cadetEmail = idx.email >= 0 ? String(data[targetRow][idx.email] || '') : '';
+    const squadron = idx.squadron >= 0 ? String(data[targetRow][idx.squadron] || '') : '';
+    const reason = idx.notes >= 0 ? String(data[targetRow][idx.notes] || '') : '';
+    const isDecisionChange = !!(oldDecision && oldDecision !== decision);
+
+    updateAttendanceOnExcusalDecision({
+      lastName,
+      firstName,
+      eventName,
+      decision,
+    });
+
+    sendExcusalDecisionEmail({
+      cadetEmail,
+      cadetFirstName: firstName,
+      cadetLastName: lastName,
+      event: eventName,
+      decision,
+      previousDecision: isDecisionChange ? oldDecision : undefined,
+      reason,
+      squadron,
+    });
+
+    Log.info(
+      `Mirrored management decision for request ${requestId}: ${decision}${isDecisionChange ? ` (was ${oldDecision})` : ''}`,
+    );
   }
 
   /**
@@ -702,7 +822,10 @@ C/${commanderLastName}`;
             Log.warn(`No commander email found for ${sheetName}; data will be owner-only`);
           }
           // Ensure owner also has edit access
-          try { dataProt.addEditor(Session.getActiveUser().getEmail()); } catch {}
+          const ownerEmail = currentUserEmail();
+          if (ownerEmail) {
+            try { dataProt.addEditor(ownerEmail); } catch {}
+          }
         } catch (err) {
           Log.warn(`Failed to protect data range on ${sheetName}: ${err}`);
         }
