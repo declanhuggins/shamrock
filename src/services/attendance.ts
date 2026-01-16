@@ -142,6 +142,224 @@ namespace AttendanceService {
     sheet.getRange(startRow, llabCol).setFormula(llabFormula);
   }
 
+  type EventSelector = {
+    names?: string[];
+    startsWith?: string[];
+    endsWith?: string[];
+    contains?: string[];
+    all?: boolean;
+  };
+
+  type CadetSelector = {
+    cadets?: string[]; // 'last, first' lowercased
+    flights?: string[];
+    universities?: string[];
+    asYears?: string[];
+    includeAbroad?: boolean;
+  };
+
+  export function fillEventColumn(opts: {
+    eventSelector: EventSelector;
+    code: string;
+    cadetSelector?: CadetSelector;
+    actorEmail?: string;
+    actorRole?: string;
+  }): number {
+    const backendId = Config.getBackendId();
+    const frontendId = Config.getFrontendId();
+    const sheet = SheetUtils.getSheet(backendId, 'Attendance Matrix Backend');
+    if (!sheet) throw new Error('Attendance Matrix Backend not found');
+
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+    if (lastRow < 3 || lastCol < 1) return 0;
+
+    const headers = sheet
+      .getRange(1, 1, 1, lastCol)
+      .getValues()[0]
+      .map((h) => String(h || '').trim());
+
+    const normalizeHeader = (h: string) => h.trim().toLowerCase().replace(/\s+/g, '_');
+    const headerLookup = new Map<string, number>();
+    headers.forEach((h, i) => headerLookup.set(normalizeHeader(h), i));
+    const findHeader = (...keys: string[]): number => {
+      for (const k of keys) {
+        const idx = headerLookup.get(normalizeHeader(k));
+        if (idx !== undefined) return idx;
+      }
+      return -1;
+    };
+
+    const eventCols = new Map<string, number>();
+    const eventSelector = opts.eventSelector || {};
+    const matchEvent = (name: string): boolean => {
+      const n = name.trim();
+      if (!n) return false;
+      const lc = n.toLowerCase();
+      if (eventSelector.all) return true;
+      if (eventSelector.names?.some((x) => x.toLowerCase() === lc)) return true;
+      if (eventSelector.startsWith?.some((x) => lc.startsWith(x.toLowerCase()))) return true;
+      if (eventSelector.endsWith?.some((x) => lc.endsWith(x.toLowerCase()))) return true;
+      if (eventSelector.contains?.some((x) => lc.includes(x.toLowerCase()))) return true;
+      return false;
+    };
+
+    const eventsSection = headers.slice(ATTENDANCE_MACHINE_HEADERS.length); // events after base + summary
+    eventsSection.forEach((evName, idx) => {
+      if (matchEvent(evName)) {
+        eventCols.set(evName, idx + ATTENDANCE_MACHINE_HEADERS.length);
+      }
+    });
+
+    if (eventCols.size === 0) throw new Error('No matching events found for selector');
+
+    const idx = {
+      flight: findHeader('flight'),
+      university: findHeader('university', 'school'),
+      asYear: findHeader('as_year', 'as year', 'year'),
+      last: findHeader('last_name', 'last name', 'last'),
+      first: findHeader('first_name', 'first name', 'first'),
+    };
+
+    const norm = (v: any) => String(v || '').trim().toLowerCase();
+
+    const directory = readDirectory();
+    const dirByName = new Map<string, any>();
+    directory.forEach((d) => {
+      const key = `${norm(d['last_name'])},${norm(d['first_name'])}`;
+      if (key.trim() === ',') return;
+      dirByName.set(key, d);
+    });
+
+    const data = sheet.getRange(3, 1, lastRow - 2, lastCol).getValues();
+    const cadetSelector: CadetSelector = opts.cadetSelector || {};
+    const cadetSet = new Set(
+      (cadetSelector.cadets || []).map((c) => {
+        const parts = String(c || '').split(',');
+        if (parts.length >= 2) return `${norm(parts[0])},${norm(parts.slice(1).join(','))}`;
+        return norm(c);
+      }),
+    );
+    const flightSet = new Set((cadetSelector.flights || []).map((f) => f.toLowerCase()));
+    const universitySet = new Set((cadetSelector.universities || []).map((u) => u.toLowerCase()));
+    const asYearSet = new Set((cadetSelector.asYears || []).map((a) => a.toLowerCase()));
+
+    const match = (row: any[]): boolean => {
+      const criteriaProvided =
+        cadetSet.size > 0 || flightSet.size > 0 || universitySet.size > 0 || asYearSet.size > 0 || cadetSelector.includeAbroad;
+      if (!criteriaProvided) return true; // no filters => all cadets
+
+      const cadetKey = idx.last >= 0 && idx.first >= 0 ? `${norm(row[idx.last])},${norm(row[idx.first])}` : '';
+      const dirRow = cadetKey ? dirByName.get(cadetKey) : undefined;
+
+      const flightVal = idx.flight >= 0 ? norm(row[idx.flight]) : norm(dirRow?.flight);
+      const univVal = idx.university >= 0 ? norm(row[idx.university]) : norm(dirRow?.university);
+      const asYearVal = idx.asYear >= 0 ? norm(row[idx.asYear]) : norm(dirRow?.as_year);
+
+      if (cadetSelector.includeAbroad && flightVal === 'abroad') return true;
+      if (cadetSet.size && cadetSet.has(cadetKey)) return true;
+      if (flightSet.size && flightSet.has(flightVal)) return true;
+      if (universitySet.size && universitySet.has(univVal)) return true;
+      if (asYearSet.size && asYearSet.has(asYearVal)) return true;
+
+      return false;
+    };
+
+    const timestamp = new Date();
+    const actor = opts.actorEmail || Session.getActiveUser().getEmail() || 'unknown';
+    let totalFilled = 0;
+
+    Array.from(eventCols.entries()).forEach(([eventName, eventCol]) => {
+      let filled = 0;
+      const colValues = data.map((row) => {
+        if (match(row)) {
+          filled += 1;
+          return [opts.code];
+        }
+        return [row[eventCol]];
+      });
+      totalFilled += filled;
+
+      sheet.getRange(3, eventCol + 1, colValues.length, 1).setValues(colValues);
+
+      if (frontendId) {
+        const frontendSheet = SheetUtils.getSheet(frontendId, 'Attendance');
+        if (frontendSheet) {
+          try {
+            frontendSheet.getRange(3, eventCol + 1, colValues.length, 1).setValues(colValues);
+          } catch (err) {
+            Log.warn(`Failed to mirror fillEventColumn to frontend: ${err}`);
+          }
+        }
+      }
+
+      // Audit per event
+      try {
+        const auditSheet = SheetUtils.getSheet(Config.getBackendId(), 'Audit Backend');
+        if (auditSheet) {
+          const headersAudit = Schemas.getTabSchema('Audit Backend')?.machineHeaders || [];
+          const auditRow: any = {};
+          headersAudit.forEach((h) => (auditRow[h] = ''));
+          auditRow['audit_id'] = Utilities.getUuid();
+          auditRow['timestamp'] = timestamp;
+          auditRow['actor_email'] = actor;
+          auditRow['role'] = opts.actorRole || 'frontend_editor';
+          auditRow['action'] = 'bulk_fill_attendance';
+          auditRow['target_sheet'] = 'Attendance Matrix Backend';
+          auditRow['target_table'] = 'attendance_matrix';
+          auditRow['target_key'] = eventName;
+          auditRow['target_range'] = `${eventName}`;
+          auditRow['old_value'] = '';
+          auditRow['new_value'] = opts.code;
+          const cadetNotesParts: string[] = [];
+          if (cadetSet.size) cadetNotesParts.push(`cadets=${cadetSet.size}`);
+          if (flightSet.size) cadetNotesParts.push(`flights=${Array.from(flightSet).join('|')}`);
+          if (universitySet.size) cadetNotesParts.push(`universities=${Array.from(universitySet).join('|')}`);
+          if (asYearSet.size) cadetNotesParts.push(`asYears=${Array.from(asYearSet).join('|')}`);
+          if (cadetSelector.includeAbroad) cadetNotesParts.push('abroad=true');
+          auditRow['notes'] = cadetNotesParts.join('; ');
+          SheetUtils.appendRows(auditSheet, [auditRow]);
+        }
+      } catch (err) {
+        Log.warn(`Unable to append audit for fillEventColumn: ${err}`);
+      }
+
+      // Attendance log per event and cadet
+      try {
+        const attendanceLogSheet = SheetUtils.getSheet(Config.getBackendId(), 'Attendance Backend');
+        if (attendanceLogSheet) {
+          const cadetNames = data
+            .map((row, i) => {
+              if (!(colValues[i][0] === opts.code && match(row))) return '';
+              const last = idx.last >= 0 ? String(row[idx.last] || '').trim() : '';
+              const first = idx.first >= 0 ? String(row[idx.first] || '').trim() : '';
+              if (!last && !first) return '';
+              return `${last}, ${first}`.trim();
+            })
+            .filter(Boolean);
+
+          if (cadetNames.length) {
+            const entry = {
+              submission_id: `bulk-fill-${eventName}-${timestamp.getTime()}-${Math.random().toString(36).slice(2, 8)}`,
+              submitted_at: timestamp,
+              event: eventName,
+              attendance_type: opts.code,
+              email: actor,
+              name: 'Bulk Fill Attendance',
+              flight: cadetNames.length > 1 ? 'Mixed' : '',
+              cadets: cadetNames.join('; '),
+            };
+            SheetUtils.appendRows(attendanceLogSheet, [entry]);
+          }
+        }
+      } catch (err) {
+        Log.warn(`Unable to append attendance log for fillEventColumn: ${err}`);
+      }
+    });
+
+    return totalFilled;
+  }
+
   function normalizeName(part: string): string {
     return String(part || '').trim().toLowerCase();
   }

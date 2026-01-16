@@ -60,7 +60,8 @@ namespace FormService {
   }
 
   interface CadetGroups {
-    byFlight: Record<string, Record<string, string[]>>; // flight -> AS -> labels
+    byFlight: Record<string, Record<string, string[]>>; // flight -> AS -> labels (excludes crosstown for Mando)
+    byFlightAll: Record<string, Record<string, string[]>>; // flight -> AS -> labels (includes crosstown for LLAB)
     byCrosstown: Record<string, Record<string, string[]>>; // university -> AS -> labels
     allByAs: Record<string, string[]>; // AS -> labels
     nonAbroadByAs: Record<string, string[]>; // AS -> labels (exclude flight Abroad)
@@ -80,7 +81,7 @@ namespace FormService {
   }
 
   function buildCadetGroups(): CadetGroups {
-    const groups: CadetGroups = { byFlight: {}, byCrosstown: {}, allByAs: {}, nonAbroadByAs: {} };
+    const groups: CadetGroups = { byFlight: {}, byFlightAll: {}, byCrosstown: {}, allByAs: {}, nonAbroadByAs: {} };
     try {
       const backendId = Config.getBackendId();
       const sheet = SheetUtils.getSheet(backendId, 'Directory Backend');
@@ -109,6 +110,11 @@ namespace FormService {
           const isCrosstown = !isAbroad && (/trine/.test(uniLc) || /valpo|valpar/.test(uniLc));
 
         if (flight) {
+          // Full flight grouping (including crosstown) for LLAB
+          groups.byFlightAll[flight] = groups.byFlightAll[flight] || {};
+          groups.byFlightAll[flight][as] = groups.byFlightAll[flight][as] || [];
+          groups.byFlightAll[flight][as].push(label);
+
           groups.byFlight[flight] = groups.byFlight[flight] || {};
           groups.byFlight[flight][as] = groups.byFlight[flight][as] || [];
           // Exclude crosstown cadets from byFlight (they go to byCrosstown for Mando)
@@ -131,6 +137,7 @@ namespace FormService {
       sortValues(groups.allByAs);
       sortValues(groups.nonAbroadByAs);
       Object.values(groups.byFlight).forEach(sortValues);
+      Object.values(groups.byFlightAll).forEach(sortValues);
       Object.values(groups.byCrosstown).forEach(sortValues);
     } catch (err) {
       Log.warn(`Unable to build cadet groups: ${err}`);
@@ -304,7 +311,7 @@ namespace FormService {
         .setGoToPage(FormApp.PageNavigationType.SUBMIT);
       llabFlightPages[fName] = page;
 
-      const groupMap = cadets.byFlight[fName] || {};
+      const groupMap = cadets.byFlightAll[fName] || cadets.byFlight[fName] || {};
       Object.keys(groupMap)
         .sort((a, b) => b.localeCompare(a, undefined, { sensitivity: 'base' }))
         .forEach((as) => {

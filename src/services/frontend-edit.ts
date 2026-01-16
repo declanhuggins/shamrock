@@ -20,11 +20,12 @@ namespace FrontendEditService {
 
   function actorEmail(): string {
     try {
-      return (Session.getActiveUser().getEmail() || '').toLowerCase();
+      const active = Session.getActiveUser().getEmail();
+      if (active) return active.toLowerCase();
     } catch (err) {
       Log.warn(`Unable to read active user email during onEdit: ${err}`);
-      return '';
     }
+    return '';
   }
 
   function allowedFieldFromHeader(header: string): AllowedField | null {
@@ -321,13 +322,6 @@ namespace FrontendEditService {
   export function onEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
     if (PauseService.isPaused()) {
       Log.info('Frontend onEdit is paused; skipping propagation.');
-      return;
-    }
-
-    const email = actorEmail();
-    const allowed = getAllowedEditors();
-    if (allowed.length && !allowed.includes(email)) {
-      Log.warn(`Frontend onEdit blocked for user=${email || 'unknown'}`);
       return;
     }
 
