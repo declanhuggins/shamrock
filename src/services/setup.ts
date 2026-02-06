@@ -98,9 +98,18 @@ namespace SetupService {
         Log.warn(`Headers present for ${name}; blanks in row1=${firstBlankCount}/${headerWidth}, row2=${secondBlankCount}/${headerWidth}`);
       }
 
-      // Trim unused columns to the exact header width to avoid excess blank space.
+      // Ensure column count matches schema (add missing columns if schema grew)
       const maxCols = sheet.getMaxColumns();
-      if (maxCols > headerWidth) {
+      if (maxCols < headerWidth) {
+        const addCount = headerWidth - maxCols;
+        Log.info(`Adding ${addCount} missing columns to ${name} to match schema (${maxCols} -> ${headerWidth})`);
+        sheet.insertColumnsAfter(maxCols, addCount);
+        // Update headers in the new columns
+        const display = displayHeaders && displayHeaders.length === machineHeaders.length ? displayHeaders : machineHeaders;
+        sheet.getRange(1, maxCols + 1, 1, addCount).setValues([machineHeaders.slice(maxCols)]);
+        sheet.getRange(2, maxCols + 1, 1, addCount).setValues([display.slice(maxCols)]);
+        headersApplied = true;
+      } else if (maxCols > headerWidth) {
         const deleteCount = maxCols - headerWidth;
         Log.info(`Deleting ${deleteCount} extra columns in ${name} (keeps ${headerWidth})`);
         sheet.deleteColumns(headerWidth + 1, deleteCount);
@@ -957,6 +966,256 @@ namespace SetupService {
     }
   }
 
+  /**
+   * Debug helper: shows what columns exist in the Attendance Form Response sheet.
+   */
+  export function debugAttendanceResponseSheet() {
+    try {
+      const respSheet = Config.getBackendSheet(Config.RESOURCE_NAMES.ATTENDANCE_FORM_SHEET);
+      const lastCol = respSheet.getLastColumn();
+      const headers = respSheet.getRange(1, 1, 1, lastCol).getValues()[0].map((h, idx) => `${idx}: "${String(h || '').trim()}"`);
+      Log.info(`Attendance Response Sheet has ${lastCol} columns:`);
+      headers.forEach((h) => Log.info(`  ${h}`));
+      
+      // Show first data row
+      const lastRow = respSheet.getLastRow();
+      if (lastRow >= 2) {
+        const firstDataRow = respSheet.getRange(2, 1, 1, lastCol).getValues()[0];
+        Log.info('First data row:');
+        firstDataRow.forEach((val, idx) => {
+          const v = String(val || '').trim();
+          if (v) Log.info(`  Col ${idx}: "${v.substring(0, 100)}"`);
+        });
+      }
+      return headers;
+    } catch (err) {
+      Log.warn(`debugAttendanceResponseSheet failed: ${err}`);
+      return [];
+    }
+  }
+
+  /**
+   * Process any existing rows in the Attendance Form Responses sheet that haven't been
+   * inserted into Attendance Backend yet (backfill for new multi-category form structure).
+   */
+  export function processAttendanceFormBacklog() {
+    try {
+      const respSheet = Config.getBackendSheet(Config.RESOURCE_NAMES.ATTENDANCE_FORM_SHEET);
+      const lastCol = respSheet.getLastColumn();
+      const lastRow = respSheet.getLastRow();
+      if (lastCol === 0 || lastRow < 2) {
+        Log.info('No attendance form responses found; nothing to backfill.');
+        return;
+      }
+
+      const headers = respSheet.getRange(1, 1, 1, lastCol).getValues()[0].map((h) => String(h || '').trim());
+
+      // Find column indices
+      const tsIdx = headers.indexOf('Timestamp');
+      const emailIdx = headers.findIndex((h) => h.toLowerCase().includes('email'));
+      const nameIdx = headers.findIndex((h) => h.toLowerCase() === 'name');
+      const eventTypeIdx = headers.findIndex((h) => h.toLowerCase() === 'event type');
+      const flightCrosstownIdx = headers.findIndex((h) => h.toLowerCase().includes('flight') && h.toLowerCase().includes('crosstown'));
+
+      // Find all "Select Event" columns (but exclude any that contain "Cadets" to avoid confusion)
+      const selectEventIndices: number[] = [];
+      headers.forEach((h, idx) => {
+        const lower = h.toLowerCase();
+        if (lower.includes('select event') && !lower.includes('cadet')) {
+          selectEventIndices.push(idx);
+        }
+      });
+
+      // Find all cadet checkbox columns (pattern: "Cadets (...) AS AS... (...)")
+      const cadetColumnIndices: Array<{ idx: number; title: string }> = [];
+      headers.forEach((h, idx) => {
+        if (h.toLowerCase().includes('cadets') && h.toLowerCase().includes('as ')) {
+          cadetColumnIndices.push({ idx, title: h });
+        }
+      });
+
+      if (selectEventIndices.length === 0) {
+        Log.warn('Attendance responses missing "Select Event" columns; cannot backfill.');
+        return;
+      }
+
+      Log.info(`Found ${selectEventIndices.length} "Select Event" columns and ${cadetColumnIndices.length} cadet columns`);
+      Log.info(`Email col: ${emailIdx}, Name col: ${nameIdx}, Flight col: ${flightCrosstownIdx}`);
+
+      // Build existing key set from Attendance Backend to avoid duplicates
+      const backendSheet = Config.getBackendSheet('Attendance Backend');
+      const backend = SheetUtils.readTable(backendSheet);
+      const existingKeys = new Set<string>();
+      backend.rows.forEach((row) => {
+        const e = String(row['email'] || '').toLowerCase().trim();
+        const ev = String(row['event'] || '').trim();
+        const ts = String(row['submitted_at'] || '').trim();
+        if (e && ev && ts) existingKeys.add(`${e}|${ev}|${ts}`);
+      });
+
+      // Helper: normalize cadet list from response value
+      const normalizeCadetList = (val: any): string[] => {
+        if (!val) return [];
+        const s = String(val).trim();
+        if (!s) return [];
+        // Google Forms checkbox responses are semicolon-separated: "Last, First; Last, First; ..."
+        return s.split(';').map((n) => n.trim()).filter(Boolean);
+      };
+
+      // Helper: lookup cadet by email for flight/squadron info
+      const lookupCadetByEmail = (addr: string) => {
+        const backendId = Config.getBackendId();
+        if (!backendId || !addr) return null;
+        const directorySheet = SheetUtils.getSheet(backendId, 'Directory Backend');
+        if (!directorySheet) return null;
+        const data = SheetUtils.readTable(directorySheet);
+        const lower = addr.toLowerCase();
+        return data.rows.find((r) => String(r['email'] || '').toLowerCase() === lower) || null;
+      };
+
+      const toAppend: Record<string, any>[] = [];
+      const logEntries: Array<{ event: string; attendance_type: string; cadets: string }> = [];
+
+      const values = respSheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+      let rowNum = 2; // Starting row number for logging
+      values.forEach((row) => {
+        const email = emailIdx >= 0 ? String(row[emailIdx] || '').trim() : '';
+        const name = nameIdx >= 0 ? String(row[nameIdx] || '').trim() : '';
+        const flightCrosstown = flightCrosstownIdx >= 0 ? String(row[flightCrosstownIdx] || '').trim() : '';
+        const tsVal = tsIdx >= 0 ? row[tsIdx] : '';
+        const submittedAt = (() => {
+          try { return new Date(tsVal).toISOString(); } catch { return new Date().toISOString(); }
+        })();
+
+        // Collect all selected events from "Select Event" columns
+        const selectedEvents: string[] = [];
+        selectEventIndices.forEach((idx) => {
+          const val = String(row[idx] || '').trim();
+          if (val) {
+            // Events should be single values, not semicolon-separated lists
+            // If we see semicolons, it's likely cadet names incorrectly in an event column
+            if (val.includes(';')) {
+              Log.warn(`Row ${rowNum}: "Select Event" column ${idx} contains suspicious value (looks like cadet list): "${val.substring(0, 50)}"`);
+            } else {
+              // Single event name
+              if (!selectedEvents.includes(val)) {
+                selectedEvents.push(val);
+              }
+            }
+          }
+        });
+
+        if (selectedEvents.length === 0) {
+          rowNum++;
+          return;
+        }
+
+        // For each selected event, determine event type and collect relevant cadets
+        selectedEvents.forEach((eventName) => {
+          const key = `${email.toLowerCase()}|${eventName}|${submittedAt}`;
+          if (existingKeys.has(key)) return;
+
+          // Determine event type from event name pattern
+          let eventType = '';
+          if (eventName.includes('LLAB') || eventName.includes('TW-')) {
+            if (eventName.includes('POC Third Hour')) {
+              eventType = 'POC';
+            } else if (eventName.includes('Secondary')) {
+              eventType = 'Secondary';
+            } else if (eventName.includes('LLAB')) {
+              eventType = 'LLAB';
+            } else {
+              eventType = 'Mando';
+            }
+          } else {
+            eventType = 'Other';
+          }
+
+          // Collect relevant cadet selections for this event type
+          const relevantCadets: string[] = [];
+          cadetColumnIndices.forEach(({ idx, title }) => {
+            const titleLower = title.toLowerCase();
+            const matches =
+              (eventType === 'Mando' && titleLower.includes('(mando)')) ||
+              (eventType === 'LLAB' && titleLower.includes('(llab)')) ||
+              (eventType === 'POC' && titleLower.includes('(poc)')) ||
+              (eventType === 'Secondary' && titleLower.includes('(secondary)')) ||
+              (eventType === 'Other' && titleLower.includes('(all)'));
+
+            if (matches) {
+              const cadets = normalizeCadetList(row[idx]);
+              cadets.forEach((c) => {
+                if (!relevantCadets.includes(c)) {
+                  relevantCadets.push(c);
+                }
+              });
+            }
+          });
+
+          const cadetField = relevantCadets.join('; ');
+          const cadet = lookupCadetByEmail(email);
+          const submissionId = `att-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+          // Determine flight field based on event type
+          let flightValue = '';
+          if (eventType === 'Mando' || eventType === 'LLAB') {
+            // For Mando/LLAB, use the selected flight (Alpha-Foxtrot, Trine, Valparaiso)
+            flightValue = flightCrosstown || cadet?.flight || '';
+          } else if (eventType === 'Secondary') {
+            flightValue = 'Secondary';
+          } else if (eventType === 'POC') {
+            flightValue = 'POC Third Hour';
+          } else if (eventType === 'Other') {
+            flightValue = 'Other';
+          }
+
+          const backendRow = {
+            submission_id: submissionId,
+            submitted_at: submittedAt,
+            event: eventName,
+            attendance_type: 'P',
+            email,
+            name,
+            flight: flightValue,
+            cadets: cadetField,
+          };
+
+          toAppend.push(backendRow);
+          logEntries.push({
+            event: eventName,
+            attendance_type: 'P',
+            cadets: cadetField,
+          });
+
+          // Log first few entries for debugging
+          if (toAppend.length <= 3) {
+            Log.info(`Row ${rowNum} Event: "${eventName}", Cadets: "${cadetField.substring(0, 50)}", Email: ${email}, Name: ${name}`);
+          }
+        });
+        
+        rowNum++;
+      });
+
+      if (!toAppend.length) {
+        Log.info('No unprocessed attendance responses found.');
+        return;
+      }
+
+      SheetUtils.appendRows(backendSheet, toAppend);
+      
+      // Apply each log entry to update the attendance matrix
+      logEntries.forEach((entry) => {
+        AttendanceService.applyAttendanceLogEntry(entry);
+      });
+
+      applyAttendanceBackendFormatting();
+
+      Log.info(`Processed attendance form backlog: appended ${toAppend.length} event rows, updated matrix.`);
+    } catch (err) {
+      Log.warn(`Failed to process attendance form backlog: ${err}`);
+    }
+  }
+
   function normalizeAttendanceBackendHeaders() {
     const sheet = Config.getBackendSheet('Attendance Backend');
 
@@ -1215,6 +1474,14 @@ namespace SetupService {
     ScriptApp.newTrigger(handlerName).timeBased().onWeekDay(weekDay).atHour(hour).create();
   }
 
+  function ensurePeriodicTrigger(handlerName: string, intervalMinutes: number) {
+    const triggers = ScriptApp.getProjectTriggers();
+    const exists = triggers.some((t) => t.getHandlerFunction() === handlerName && t.getTriggerSource() === ScriptApp.TriggerSource.CLOCK);
+    if (exists) return;
+    Log.info(`Creating periodic trigger handler=${handlerName} interval=${intervalMinutes}min`);
+    ScriptApp.newTrigger(handlerName).timeBased().everyMinutes(intervalMinutes).create();
+  }
+
   // Deletes all installable triggers, then reinstalls the canonical SHAMROCK triggers for forms and spreadsheets.
   export function reinstallAllTriggers() {
     Log.info('Reinstalling all installable triggers');
@@ -1237,6 +1504,9 @@ namespace SetupService {
     ensureSpreadsheetTrigger('onBackendOpen', backendId, 'open');
     ensureSpreadsheetTrigger('onBackendEdit', backendId, 'edit');
     ensureSpreadsheetTrigger('onExcusalsManagementEdit', managementId, 'edit');
+
+    // Time-based trigger: reconcile frontend Directory edits every 10 minutes (handles edits by unauthorized users).
+    ensurePeriodicTrigger('reconcilePendingDirectoryEdits', 10);
 
     // Recreate form submit triggers for attendance/excusal/directory.
     const props = Config.scriptProperties();
@@ -1806,6 +2076,9 @@ namespace SetupService {
     ensureSpreadsheetTrigger('onFrontendEdit', frontend.id, 'edit');
     ensureSpreadsheetTrigger('onBackendOpen', backend.id, 'open');
     ensureSpreadsheetTrigger('onBackendEdit', backend.id, 'edit');
+
+    // Time-based trigger: reconcile frontend Directory edits every 10 minutes (handles edits by unauthorized users).
+    ensurePeriodicTrigger('reconcilePendingDirectoryEdits', 10);
 
     Log.info(`Setup finished: spreadsheets=${spreadsheetResults.length}, sheets=${sheetResults.length}, forms=${formResults.length}`);
 

@@ -1,9 +1,40 @@
 // Frontend onEdit handling for Directory edits with audit and backend sync.
 
 namespace FrontendEditService {
-  type AllowedField = 'as_year' | 'flight' | 'squadron' | 'university';
+  type AllowedField =
+    | 'as_year'
+    | 'flight'
+    | 'squadron'
+    | 'university'
+    | 'phone'
+    | 'dorm'
+    | 'cip_broad_area'
+    | 'cip_code'
+    | 'desired_assigned_afsc'
+    | 'home_town'
+    | 'home_state'
+    | 'class_year'
+    | 'dob'
+    | 'flight_path_status'
+    | 'notes';
 
-  const ALLOWED_FIELDS: AllowedField[] = ['as_year', 'flight', 'squadron', 'university'];
+  const ALLOWED_FIELDS: AllowedField[] = [
+    'as_year',
+    'flight',
+    'squadron',
+    'university',
+    'phone',
+    'dorm',
+    'cip_broad_area',
+    'cip_code',
+    'desired_assigned_afsc',
+    'home_town',
+    'home_state',
+    'class_year',
+    'dob',
+    'flight_path_status',
+    'notes',
+  ];
 
   function getAllowedEditors(): string[] {
     try {

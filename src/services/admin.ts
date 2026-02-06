@@ -336,7 +336,44 @@ namespace AdminService {
       return;
     }
 
-    SheetUtils.writeTable(sheet, rows);
+    if (category === 'events') {
+      const existing = SheetUtils.readTable(sheet).rows;
+      const toKey = (row: Record<string, any>) => {
+        const eventId = String(row['event_id'] || '').trim();
+        if (eventId) return `id:${eventId.toLowerCase()}`;
+        const name = String(row['display_name'] || row['attendance_column_label'] || '').trim();
+        return name ? `name:${name.toLowerCase()}` : '';
+      };
+
+      const merged = new Map<string, Record<string, any>>();
+      existing.forEach((row) => {
+        const key = toKey(row);
+        if (key) merged.set(key, row);
+      });
+      rows.forEach((row) => {
+        const key = toKey(row);
+        if (key) merged.set(key, row);
+        else merged.set(`row:${merged.size}`, row);
+      });
+
+      const mergedRows = Array.from(merged.values());
+      mergedRows.sort((a, b) => {
+        const aRaw = String(a['start_datetime'] || '');
+        const bRaw = String(b['start_datetime'] || '');
+        const aTime = aRaw ? new Date(aRaw).getTime() : Number.NaN;
+        const bTime = bRaw ? new Date(bRaw).getTime() : Number.NaN;
+        const aValid = Number.isFinite(aTime);
+        const bValid = Number.isFinite(bTime);
+        if (aValid && bValid) return aTime - bTime;
+        if (aValid) return -1;
+        if (bValid) return 1;
+        return aRaw.localeCompare(bRaw, undefined, { sensitivity: 'base' });
+      });
+
+      SheetUtils.writeTable(sheet, mergedRows);
+    } else {
+      SheetUtils.writeTable(sheet, rows);
+    }
     if (info.location === 'backend') {
       // Keep frontend view in sync for mapped backend tables (e.g., Leadership).
       SyncService.syncByBackendSheetName(info.sheetName);

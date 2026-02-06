@@ -84,12 +84,14 @@ SHAMROCK Automations`;
     const lastName = String(excusalRow['last_name'] || '').trim();
     const firstName = String(excusalRow['first_name'] || '').trim();
     const eventName = String(excusalRow['event'] || '').trim();
+    const requestedType = String(excusalRow['requested_attendance_type'] || 'E').trim();
 
     if (!lastName || !firstName || !eventName) return;
 
-    // Determine current matrix value to pick ER vs UR
+    // Determine current matrix value to pick appropriate pending code
     const current = lookupMatrixValue(eventName, lastName, firstName);
-    const code = current === 'U' ? 'UR' : 'ER';
+    // If currently unexcused, mark as UR; otherwise use requested type + R (e.g., ESR, MRSR, ER)
+    const code = current === 'U' ? 'UR' : `${requestedType}R`;
 
     const logEntry = {
       submission_id: `excusal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -480,12 +482,17 @@ SHAMROCK Automations`;
       if (decidedByIdx >= 0) sheet.getRange(row, decidedByIdx + 1).setValue(currentUserEmail());
       if (decidedAtIdx >= 0) sheet.getRange(row, decidedAtIdx + 1).setValue(new Date().toISOString());
 
+      // Lookup requested attendance type from the row
+      const requestedTypeIdx = headers.indexOf('requested_attendance_type');
+      const requestedType = requestedTypeIdx >= 0 ? String(sheet.getRange(row, requestedTypeIdx + 1).getValue() || 'E') : 'E';
+
       // Update attendance matrix based on decision
       updateAttendanceOnExcusalDecision({
         lastName,
         firstName,
         eventName,
         decision: newValue,
+        requestedType,
       });
 
       // Check if decision is being changed (not initial decision)
@@ -559,6 +566,7 @@ SHAMROCK Automations`;
       first: headers.indexOf(headerName('first_name')),
       squadron: headers.indexOf(headerName('squadron')),
       notes: headers.indexOf(headerName('notes')),
+      requested_attendance_type: headers.indexOf(headerName('requested_attendance_type')),
     };
 
     if (idx.request < 0) return;
@@ -594,6 +602,7 @@ SHAMROCK Automations`;
     const cadetEmail = idx.email >= 0 ? String(data[targetRow][idx.email] || '') : '';
     const squadron = idx.squadron >= 0 ? String(data[targetRow][idx.squadron] || '') : '';
     const reason = idx.notes >= 0 ? String(data[targetRow][idx.notes] || '') : '';
+    const requestedType = idx.requested_attendance_type >= 0 ? String(data[targetRow][idx.requested_attendance_type] || 'E') : 'E';
     const isDecisionChange = !!(oldDecision && oldDecision !== decision);
 
     updateAttendanceOnExcusalDecision({
@@ -601,6 +610,7 @@ SHAMROCK Automations`;
       firstName,
       eventName,
       decision,
+      requestedType,
     });
 
     sendExcusalDecisionEmail({
@@ -629,12 +639,17 @@ SHAMROCK Automations`;
     firstName: string;
     eventName: string;
     decision: string;
+    requestedType?: string;
   }) {
     const current = lookupMatrixValue(opts.eventName, opts.lastName, opts.firstName);
     let code = '';
     if (opts.decision === 'Approved') {
-      code = 'E';
+      // Use the requested type if available, otherwise default to E
+      // Strip R suffix if current is pending (e.g., ESR -> ES, MRSR -> MRS, ER -> E)
+      const requestedType = opts.requestedType || 'E';
+      code = requestedType;
     } else {
+      // Denied: UR -> U, anything else -> ED
       code = current === 'UR' ? 'U' : 'ED';
     }
 
