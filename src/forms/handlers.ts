@@ -35,14 +35,34 @@ namespace FormHandlers {
 		SheetUtils.appendRows(Config.getBackendSheet(sheetName), rows);
 	}
 
-	function lookupCadetByEmail(email: string) {
+	function lookupCadetByEmail(email: string, lastName?: string, firstName?: string) {
 		const backendId = Config.getBackendId();
 		if (!backendId || !email) return null;
 		const directorySheet = SheetUtils.getSheet(backendId, 'Directory Backend');
 		if (!directorySheet) return null;
 		const data = SheetUtils.readTable(directorySheet);
 		const lower = email.toLowerCase();
-		return data.rows.find((r) => String(r['email'] || '').toLowerCase() === lower) || null;
+		
+		// Try email match first
+		const byEmail = data.rows.find((r) => String(r['email'] || '').toLowerCase() === lower);
+		if (byEmail) return byEmail;
+		
+		// Fallback: try matching by last name + first name (case insensitive)
+		if (lastName && firstName) {
+			const lastLower = lastName.toLowerCase().trim();
+			const firstLower = firstName.toLowerCase().trim();
+			const byName = data.rows.find((r) => {
+				const rLast = String(r['last_name'] || '').toLowerCase().trim();
+				const rFirst = String(r['first_name'] || '').toLowerCase().trim();
+				return rLast === lastLower && rFirst === firstLower;
+			});
+			if (byName) {
+				Log.info(`lookupCadetByEmail: matched by name for ${firstName} ${lastName} (email ${email} not found)`);
+				return byName;
+			}
+		}
+		
+		return null;
 	}
 
 	function sendReceipt(opts: { to: string; subject: string; body: string; replyTo?: string }) {
@@ -96,132 +116,189 @@ namespace FormHandlers {
 			const namedValues = getNamedValues(e);
 			const submittedByEmail = getEmail(e);
 			const submittedAt = formatTimestamp(e.response?.getTimestamp?.() || new Date());
-			const submissionId = `att-${Date.now()}`;
 
-			// Use item responses for robustness (titles can vary), with namedValues as fallback.
-			let eventName = '';
-			let submittedByName = '';
-			let flight = '';
-			const cadetSelections: string[] = [];
+		// Parse the new multi-category form structure
+		let submittedByName = '';
+		let flightOrCrosstown = ''; // For mando events
+		const selectedEvents: string[] = [];
+		const cadetsByColumn: Map<string, string[]> = new Map();
 
-			const normalizeToList = (val: any): string[] => {
-				if (Array.isArray(val)) {
-					return val
-						.map((v) => String(v || ''))
-						.flatMap((v) => v.split(',').map((s) => s.trim()))
-						.filter(Boolean);
-				}
-				const s = String(val || '').trim();
-				if (!s) return [];
-				return s
-					.split(',')
-					.map((x) => x.trim())
+		const normalizeToList = (val: any): string[] => {
+			if (Array.isArray(val)) {
+				return val
+					.map((v) => String(v || ''))
+					.flatMap((v) => {
+						// Google Forms checkbox responses are semicolon-separated: "Last, First; Last, First; ..."
+						if (String(v).includes(';')) {
+							return v.split(';').map((s: string) => s.trim());
+						}
+						return [String(v).trim()];
+					})
 					.filter(Boolean);
-			};
-
-			try {
-				e.response.getItemResponses().forEach((ir) => {
-					const title = (ir.getItem().getTitle() || '').trim();
-					const lower = title.toLowerCase();
-					const resp = ir.getResponse();
-					const list = normalizeToList(resp);
-
-					if (!eventName && lower === 'event') {
-						eventName = list[0] || String(resp || '').trim();
-					}
-
-					if (!submittedByName && lower.includes('name') && !lower.includes('cadets')) {
-						submittedByName = list[0] || String(resp || '').trim();
-					}
-
-					if (!flight && lower.includes('flight')) {
-						flight = list[0] || String(resp || '').trim();
-					}
-
-					if (lower.includes('cadets')) {
-						list.forEach((n) => cadetSelections.push(n));
-					}
-				});
-			} catch (err) {
-				Log.warn(`attendance parse (items) failed: ${err}`);
 			}
+			const s = String(val || '').trim();
+			if (!s) return [];
+			// Google Forms checkbox responses are semicolon-separated
+			if (s.includes(';')) {
+				return s.split(';').map((x) => x.trim()).filter(Boolean);
+			}
+			// Single value or non-cadet field
+			return [s];
+		};
 
-			// Fallbacks to namedValues if still empty.
-			if (!eventName) {
-				eventName =
-					getFirstNamedValue(namedValues, 'Event') ||
-					findFirstValue(namedValues, (k) => k.toLowerCase().trim() === 'event');
-			}
-			if (!submittedByName) {
-				submittedByName =
-					getFirstNamedValue(namedValues, 'Name') ||
-					getFirstNamedValue(namedValues, 'Submitted By Name') ||
-					findFirstValue(namedValues, (k) => k.toLowerCase().includes('name'));
-			}
-			if (!flight) {
-				flight =
-					getFirstNamedValue(namedValues, 'Flight / Crosstown (LLAB)') ||
-					getFirstNamedValue(namedValues, 'Flight (Mando PT)') ||
-					getFirstNamedValue(namedValues, 'Flight / Crosstown') ||
-					getFirstNamedValue(namedValues, 'Flight (LLAB)') ||
-					findFirstValue(namedValues, (k) => k.toLowerCase().includes('flight'));
-			}
+		// Parse item responses
+		try {
+			e.response.getItemResponses().forEach((ir) => {
+				const title = (ir.getItem().getTitle() || '').trim();
+				const lower = title.toLowerCase();
+				const resp = ir.getResponse();
+				const list = normalizeToList(resp);
 
-			if (!cadetSelections.length) {
-				Object.entries(namedValues).forEach(([key, vals]) => {
-					const lowerKey = key.toLowerCase();
-					if (!lowerKey.includes('cadets')) return;
-					const list = normalizeToList(vals);
-					list.forEach((n) => cadetSelections.push(n));
-				});
-			}
+				// Collect submitter name
+				if (!submittedByName && lower.includes('name') && !lower.includes('cadets')) {
+					submittedByName = list[0] || String(resp || '').trim();
+				}
 
-			// If responses are alternating Last/First, re-pair into "Last, First" before dedupe.
-			const normalizeCadetNames = (names: string[]): string[] => {
-				if (!names.length) return names;
-				const hasComma = names.some((n) => n.includes(','));
-				if (hasComma) return names;
-				if (names.length < 2) return names;
-				const paired: string[] = [];
-				for (let i = 0; i < names.length; i += 2) {
-					const last = names[i];
-					const first = names[i + 1];
-					if (first !== undefined && first !== '') {
-						paired.push(`${last}, ${first}`.trim());
-					} else {
-						paired.push(last);
+				// Collect flight/crosstown for mando events
+				if (lower.includes('flight') && lower.includes('crosstown')) {
+					flightOrCrosstown = list[0] || String(resp || '').trim();
+				}
+
+				// Collect all selected events from "Select Event" columns
+				if (lower.includes('select event')) {
+					const events = normalizeToList(resp);
+					events.forEach((ev) => {
+						if (ev && !selectedEvents.includes(ev)) {
+							selectedEvents.push(ev);
+						}
+					});
+				}
+
+				// Collect cadet selections from columns like "Cadets (Alpha) AS AS400 (Mando)"
+				if (lower.includes('cadets') && lower.includes('as ')) {
+					const cadets = normalizeToList(resp);
+					if (cadets.length > 0) {
+						cadetsByColumn.set(title, cadets);
 					}
 				}
-				return paired;
-			};
+			});
+		} catch (err) {
+			Log.warn(`attendance parse (items) failed: ${err}`);
+		}
 
-			const normalizedCadets = normalizeCadetNames(cadetSelections);
+		// Fallback to namedValues if needed
+		if (!submittedByName) {
+			submittedByName =
+				getFirstNamedValue(namedValues, 'Name') ||
+				findFirstValue(namedValues, (k) => k.toLowerCase().includes('name') && !k.toLowerCase().includes('cadets'));
+		}
 
-			// Deduplicate while preserving first-seen order.
-			const seen = new Set<string>();
-			const cadetField = normalizedCadets
-				.filter((n) => {
-					const key = n.toLowerCase();
-					if (seen.has(key)) return false;
-					seen.add(key);
-					return true;
-				})
-				.join('; ');
+		if (!flightOrCrosstown) {
+			flightOrCrosstown =
+				getFirstNamedValue(namedValues, 'Flight / Crosstown (Mando)') ||
+				getFirstNamedValue(namedValues, 'Flight / Crosstown') ||
+				findFirstValue(namedValues, (k) => k.toLowerCase().includes('flight') && k.toLowerCase().includes('crosstown'));
+		}
 
-			const flightFromDirectory = submittedByEmail ? lookupCadetByEmail(submittedByEmail)?.flight || '' : '';
+		if (selectedEvents.length === 0) {
+			Object.entries(namedValues).forEach(([key, vals]) => {
+				if (key.toLowerCase().includes('select event')) {
+					const events = normalizeToList(vals);
+					events.forEach((ev) => {
+						if (ev && !selectedEvents.includes(ev)) {
+							selectedEvents.push(ev);
+						}
+					});
+				}
+			});
+		}
 
-			appendToBackend('Attendance Backend', [
-				{
-					submission_id: submissionId,
-					submitted_at: submittedAt,
-					event: eventName,
-					attendance_type: 'P',
-					email: submittedByEmail,
-					name: submittedByName,
-					flight: flight || flightFromDirectory,
-					cadets: cadetField,
-				},
-			]);
+		if (cadetsByColumn.size === 0) {
+			Object.entries(namedValues).forEach(([key, vals]) => {
+				const lowerKey = key.toLowerCase();
+				if (lowerKey.includes('cadets') && lowerKey.includes('as ')) {
+					const cadets = normalizeToList(vals);
+					if (cadets.length > 0) {
+						cadetsByColumn.set(key, cadets);
+					}
+				}
+			});
+		}
+
+		if (selectedEvents.length === 0) {
+			Log.warn('No events selected in attendance form submission; skipping.');
+			return;
+		}
+
+		// For each selected event, determine which cadet columns apply and create a backend entry
+		const flightFromDirectory = submittedByEmail ? lookupCadetByEmail(submittedByEmail)?.flight || '' : '';
+		const backendRows: any[] = [];
+
+		selectedEvents.forEach((eventName) => {
+			// Determine event type from event name pattern
+			let eventType = '';
+			if (eventName.includes('LLAB') || eventName.includes('TW-')) {
+				if (eventName.includes('POC Third Hour')) {
+					eventType = 'POC';
+				} else if (eventName.includes('Secondary')) {
+					eventType = 'Secondary';
+				} else if (eventName.includes('LLAB')) {
+					eventType = 'LLAB';
+				} else {
+					eventType = 'Mando';
+				}
+			} else {
+				eventType = 'Other';
+			}
+
+			// Collect relevant cadet selections for this event type
+			const relevantCadets: string[] = [];
+			cadetsByColumn.forEach((cadets, columnTitle) => {
+				const columnLower = columnTitle.toLowerCase();
+				
+				// Match columns by event type
+				const matches = 
+					(eventType === 'Mando' && columnLower.includes('(mando)')) ||
+					(eventType === 'LLAB' && columnLower.includes('(llab)')) ||
+					(eventType === 'POC' && columnLower.includes('(poc)')) ||
+					(eventType === 'Secondary' && columnLower.includes('(secondary)')) ||
+					(eventType === 'Other' && columnLower.includes('(all)'));
+
+				if (matches) {
+					cadets.forEach((name) => {
+						if (!relevantCadets.includes(name)) {
+							relevantCadets.push(name);
+						}
+					});
+				}
+			});
+
+			const cadetField = relevantCadets.join('; ');
+			const submissionId = `att-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+			// Determine flight field based on event type
+			let flightValue = '';
+			if (eventType === 'Mando' || eventType === 'LLAB') {
+				// For Mando/LLAB, use the selected flight (Alpha-Foxtrot, Trine, Valparaiso)
+				flightValue = flightOrCrosstown || flightFromDirectory;
+			} else if (eventType === 'Secondary') {
+				flightValue = 'Secondary';
+			} else if (eventType === 'POC') {
+				flightValue = 'POC Third Hour';
+			} else if (eventType === 'Other') {
+				flightValue = 'Other';
+			}
+
+			backendRows.push({
+				submission_id: submissionId,
+				submitted_at: submittedAt,
+				event: eventName,
+				attendance_type: 'P',
+				email: submittedByEmail,
+				name: submittedByName,
+				flight: flightValue,
+				cadets: cadetField,
+			});
 
 			// Incrementally apply the new log entry to the matrices (no full rebuild).
 			AttendanceService.applyAttendanceLogEntry({
@@ -229,32 +306,36 @@ namespace FormHandlers {
 				attendance_type: 'P',
 				cadets: cadetField,
 			});
+		});
 
+		if (backendRows.length > 0) {
+			appendToBackend('Attendance Backend', backendRows);
 			SetupService.applyAttendanceBackendFormattingPublic();
-
-			// Deliberately omit email receipt for attendance submissions per policy.
+			Log.info(`Processed attendance submission: ${selectedEvents.length} event(s) from ${submittedByEmail}`);
 		}
+
+		// Deliberately omit email receipt for attendance submissions per policy.
+	}
 
 	export function onExcusalsFormSubmit(e: GoogleAppsScript.Events.FormsOnFormSubmit) {
 		const namedValues = getNamedValues(e);
 		const email = getEmail(e);
 		const submittedAt = formatTimestamp(e.response?.getTimestamp?.() || new Date());
 
-		// Look up cadet info from Directory Backend
-		const cadet = lookupCadetByEmail(email);
-
 		// Parse form responses using item responses for robustness
 		let events: string[] = [];
 		let lastName = '';
 		let firstName = '';
 		let reason = '';
+		let requestedAttendanceType = 'E'; // default to generic excused
 		const itemResponses = e.response?.getItemResponses() || [];
 		
 		for (const itemResponse of itemResponses) {
 			const title = itemResponse.getItem().getTitle();
 			const response = itemResponse.getResponse();
 			
-			if (title === 'Event') {
+			// Match any "Select Event(s)" variant (Mando, LLAB, POC Third Hour, Secondary, Other)
+			if (title === 'Event' || title.toLowerCase().includes('select event')) {
 				if (Array.isArray(response)) {
 					events = response.map((e) => String(e || '').trim()).filter(Boolean);
 				} else {
@@ -270,6 +351,8 @@ namespace FormHandlers {
 				firstName = String(response || '').trim();
 			} else if (title === 'Reason') {
 				reason = String(response || '').trim();
+			} else if (title === 'Requested Attendance Type') {
+				requestedAttendanceType = String(response || 'E').trim();
 			}
 		}
 
@@ -277,6 +360,9 @@ namespace FormHandlers {
 			Log.warn(`Excusal submission from ${email} has no events; skipping backend append.`);
 			return;
 		}
+
+		// Look up cadet info from Directory Backend (with name fallback if email not found)
+		const cadet = lookupCadetByEmail(email, lastName, firstName);
 
 		// Create one row per event in Excusals Backend
 		const rows = events.map((eventName) => {
@@ -293,6 +379,7 @@ namespace FormHandlers {
 				decision: '',
 				decided_by: '',
 				decided_at: '',
+				requested_attendance_type: requestedAttendanceType,
 				attendance_effect: '',
 				submitted_at: submittedAt,
 				last_updated_at: submittedAt,
@@ -306,11 +393,11 @@ namespace FormHandlers {
 		rows.forEach((row) => {
 			ExcusalsService.notifySquadronCommanderOfNewExcusal(row);
 			ExcusalsService.syncExcusalToManagementPanel(row);
-			// Update attendance matrix: empty -> ER, unexcused -> UR
+			// Update attendance matrix: empty -> ESR/MRSR/ER, unexcused -> UR
 			ExcusalsService.updateAttendanceOnExcusalSubmission(row);
 		});
 
-		Log.info(`Excusal submission processed: ${email} requesting excusal for ${events.length} event(s)`);
+		Log.info(`Excusal submission processed: ${email} requesting excusal for ${events.length} event(s) as ${requestedAttendanceType}`);
 
 		// Deliberately omit email receipt for excusal submissions per policy.
 	}

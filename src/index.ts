@@ -61,6 +61,7 @@ function addShamrockMenu() {
         .addItem('Share Excusals Management Spreadsheet', 'shareExcusalsManagementSpreadsheet')
         .addItem('Reinitialize Excusals Management Sheets', 'reinitializeExcusalsManagementSheets')
         .addItem('Process Excusals Form Backlog', 'processExcusalsFormBacklog')
+        .addItem('Process Attendance Form Backlog', 'processAttendanceFormBacklog')
         .addItem('Prune Attendance Response Duplicates', 'pruneAttendanceResponseColumns')
         .addItem('Prune Excusals Response Duplicates', 'pruneExcusalsResponseColumns')
         .addSeparator()
@@ -92,7 +93,9 @@ function addShamrockMenu() {
     .createMenu('SAFE FUNCTIONS')
     .addItem('Add Leadership Entry', 'addLeadershipEntry')
     .addItem('Fix Attendance Headers', 'fixAttendanceHeaders')
-    .addItem('Fill Attendance Event (bulk)', 'fillAttendanceEventPrompt');
+    .addItem('Fill Attendance Event (bulk)', 'fillAttendanceEventPrompt')
+    .addItem('Replay Latest Directory Form', 'replayLatestDirectoryFormResponse')
+    .addItem('Debug Attendance Response Sheet', 'debugAttendanceResponseSheet');
 
   ui
     .createMenu('SHAMROCK')
@@ -259,6 +262,16 @@ function refreshExcusalsForm() {
 
 function processExcusalsFormBacklog() {
   SetupService.processExcusalsFormBacklog();
+}
+
+function processAttendanceFormBacklog() {
+  SetupService.processAttendanceFormBacklog();
+  SpreadsheetApp.getUi().alert('Processed attendance form backlog. Check logs for details.');
+}
+
+function debugAttendanceResponseSheet() {
+  const headers = SetupService.debugAttendanceResponseSheet();
+  SpreadsheetApp.getUi().alert(`Found ${headers.length} columns in Attendance Response Sheet. Check logs for details.`);
 }
 
 function setupExcusalsManagementSpreadsheet() {
@@ -753,10 +766,38 @@ function onDirectoryFormSubmit(e: GoogleAppsScript.Events.FormsOnFormSubmit) {
   FormHandlers.onDirectoryFormSubmit(e);
 }
 
+// Debug: replay the latest Directory form response through the handler.
+function replayLatestDirectoryFormResponse() {
+  const ok = DirectoryService.replayLatestDirectoryFormResponse();
+  SpreadsheetApp.getUi().alert(ok ? 'Replayed latest Directory form response.' : 'No Directory form response replayed.');
+}
+
 function onAttendanceFormSubmit(e: GoogleAppsScript.Events.FormsOnFormSubmit) {
   FormHandlers.onAttendanceFormSubmit(e);
 }
 
 function onExcusalsFormSubmit(e: GoogleAppsScript.Events.FormsOnFormSubmit) {
   FormHandlers.onExcusalsFormSubmit(e);
+}
+
+// Time-based trigger: reconcile frontend Directory edits to backend (handles edits by unauthorized users).
+function reconcilePendingDirectoryEdits() {
+  if (PauseService.isPaused()) {
+    Log.info('Automation paused; skipping Directory reconciliation.');
+    return;
+  }
+  try {
+    const result = FrontendEditService.reconcilePendingDirectoryEdits();
+    if (result.updated > 0) {
+      Log.info(`Reconciled ${result.updated} Directory edits from frontend to backend`);
+      // After reconciling, sync backend -> frontend and rebuild attendance
+      SyncService.syncByBackendSheetName('Directory');
+      AttendanceService.rebuildMatrix();
+    }
+    if (result.missing > 0) {
+      Log.warn(`${result.missing} frontend Directory rows not found in backend`);
+    }
+  } catch (err) {
+    Log.warn(`reconcilePendingDirectoryEdits failed: ${err}`);
+  }
 }

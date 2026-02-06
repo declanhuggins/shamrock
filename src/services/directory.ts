@@ -142,34 +142,117 @@ namespace DirectoryService {
 
   export function handleDirectoryFormSubmission(e: GoogleAppsScript.Events.FormsOnFormSubmit) {
     const nv = getNamedValues(e);
+
+    // Build a case-insensitive map of item titles -> response (string)
+    const itemMap = (() => {
+      const m = new Map<string, string>();
+      try {
+        e.response.getItemResponses().forEach((ir) => {
+          const title = String(ir.getItem().getTitle?.() || '').trim().toLowerCase();
+          if (!title) return;
+          const resp = ir.getResponse();
+          let value = '';
+          if (Array.isArray(resp)) {
+            value = resp.map((r) => String(r || '').trim()).filter(Boolean).join(', ');
+          } else {
+            value = String(resp || '').trim();
+          }
+          if (!value) return;
+          m.set(title, value);
+        });
+      } catch (err) {
+        Log.warn(`Directory form: unable to read item responses: ${err}`);
+      }
+      return m;
+    })();
+
+    const pick = (keys: string[], fallbackKey?: string): string => {
+      for (const k of keys) {
+        const found = itemMap.get(k.toLowerCase());
+        if (found) return found;
+      }
+      if (fallbackKey) return getFirst(nv, fallbackKey);
+      for (const k of keys) {
+        const val = getFirst(nv, k);
+        if (val) return val;
+      }
+      return '';
+    };
+
     const respondentEmail = String(e.response.getRespondentEmail?.() || '').trim();
-    const email = respondentEmail || getFirst(nv, 'Email Address');
+    const email =
+      respondentEmail ||
+      pick(['email', 'email address', 'email address (college)'], 'Email') ||
+      getFirst(nv, 'Email Address');
 
     const record: DirectoryRecord = {
       source: 'directory_form',
-      last_name: getFirst(nv, 'Last Name'),
-      first_name: getFirst(nv, 'First Name'),
-      as_year: getFirst(nv, 'AS Year'),
-      class_year: getFirst(nv, 'Class Year (YYYY)'),
-      flight: getFirst(nv, 'Flight'),
-      squadron: getFirst(nv, 'Squadron'),
-      university: getFirst(nv, 'University'),
+      last_name: pick(['last name', 'last']),
+      first_name: pick(['first name', 'first']),
+      as_year: pick(['as year', 'as-year', 'year']),
+      class_year: pick(['class year (yyyy)', 'class year']),
+      flight: pick(['flight']),
+      squadron: pick(['squadron']),
+      university: pick(['university', 'school']),
       email,
-      phone: normalizePhone(getFirst(nv, 'Phone (+5 (555) 555-5555)')),
-      dorm: getFirst(nv, 'Dorm'),
-      home_town: getFirst(nv, 'Home Town'),
-      home_state: getFirst(nv, 'Home State'),
-      dob: getFirst(nv, 'DOB (MM/DD/YYYY)'),
-      cip_broad_area: getFirst(nv, 'CIP Broad Area'),
-      cip_code: sanitizeCipCode(getFirst(nv, 'CIP Code (XX.XXXX)')),
-      desired_assigned_afsc: getFirst(nv, 'Desired/Assigned AFSC'),
-      flight_path_status: getFirst(nv, 'Flight Path Status'),
-      photo_link: getFirst(nv, 'Photo Link (URL)'),
-      notes: getFirst(nv, 'Notes'),
+      phone: normalizePhone(pick(['phone (+5 (555) 555-5555)', 'phone', 'phone number'])),
+      dorm: pick(['dorm']),
+      home_town: pick(['home town', 'hometown']),
+      home_state: pick(['home state', 'state']),
+      dob: pick(['dob (mm/dd/yyyy)', 'dob', 'date of birth']),
+      cip_broad_area: pick(['cip broad area', 'cip broad']),
+      cip_code: sanitizeCipCode(pick(['cip code (xx.xxxx)', 'cip code'])),
+      desired_assigned_afsc: pick(['desired/assigned afsc', 'afsc']),
+      flight_path_status: pick(['flight path status', 'flight path']),
+      photo_link: pick(['photo link (url)', 'photo link', 'photo url']),
+      notes: pick(['notes', 'additional notes']),
     };
 
     upsertBackendRecord(record);
     syncDirectoryFrontend();
+  }
+
+  /**
+   * Replays the most recent Directory form response through the handler (useful for debugging ingestion).
+   * Reads the form by DIRECTORY_FORM_ID and constructs a synthetic FormsOnFormSubmit event.
+   */
+  export function replayLatestDirectoryFormResponse(): boolean {
+    const formId = Config.scriptProperties().getProperty(Config.PROPERTY_KEYS.DIRECTORY_FORM_ID) || '';
+    if (!formId) {
+      Log.warn('Cannot replay Directory form response: DIRECTORY_FORM_ID missing.');
+      return false;
+    }
+
+    try {
+      const form = FormApp.openById(formId);
+      const responses = form.getResponses();
+      if (!responses.length) {
+        Log.warn('Cannot replay Directory form response: no responses found.');
+        return false;
+      }
+      const resp = responses[responses.length - 1];
+
+      // Build namedValues from item titles.
+      const namedValues: Record<string, string[]> = {};
+      resp.getItemResponses().forEach((ir) => {
+        const title = String(ir.getItem().getTitle?.() || '').trim();
+        const raw = ir.getResponse();
+        if (!title) return;
+        if (Array.isArray(raw)) namedValues[title] = raw.map((r) => String(r || '').trim());
+        else namedValues[title] = [String(raw || '').trim()];
+      });
+
+      const syntheticEvent = {
+        response: resp,
+        namedValues,
+      } as unknown as GoogleAppsScript.Events.FormsOnFormSubmit;
+
+      handleDirectoryFormSubmission(syntheticEvent);
+      return true;
+    } catch (err) {
+      Log.warn(`Unable to replay Directory form response: ${err}`);
+      return false;
+    }
   }
 
   export function protectFrontendDirectory(frontendId: string) {

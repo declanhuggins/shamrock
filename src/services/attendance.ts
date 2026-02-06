@@ -10,6 +10,7 @@ namespace AttendanceService {
     name: string; // display_name
     eventId: string;
     eventType: string;
+    expectedGroup: string;
   }
 
   const ATTENDANCE_SCHEMA = Schemas.getTabSchema('Attendance');
@@ -42,8 +43,8 @@ namespace AttendanceService {
   const ATT_HEADER_FIRST = BASE_HEADERS.find((h) => h === 'first_name') || 'first_name';
   const CREDIT_CODES = new Set(['P', 'E', 'ES', 'MU', 'MRS']);
   const CREDIT_PATTERNS = ['P*', 'E', 'ES*', 'MU*', 'MRS*'];
-  // ER/ED/UR stay neutral (not in denominator) so they don't affect attendance %
-  const TOTAL_PATTERNS = ['P*', 'E', 'ES*', 'T*', 'U', 'MU*', 'MRS*'];
+  // ER/ED stay neutral (not in denominator); UR counts against attendance
+  const TOTAL_PATTERNS = ['P*', 'E', 'ES*', 'T*', 'U', 'UR', 'MU*', 'MRS*'];
 
   function ensureMatrixSheet(spreadsheetId: string, name: string): GoogleAppsScript.Spreadsheet.Sheet | null {
     if (!spreadsheetId) return null;
@@ -72,6 +73,7 @@ namespace AttendanceService {
         name: r['display_name'] || r['attendance_column_label'] || r['event_id'] || '',
         eventId: r['event_id'] || r['display_name'] || '',
         eventType: String(r['event_type'] || '').toLowerCase(),
+        expectedGroup: String(r['expected_group'] || '').toLowerCase(),
       }))
       .filter((e) => e.name);
   }
@@ -421,6 +423,30 @@ namespace AttendanceService {
         const row = rows[idx] as any;
         if (evName in row) {
           row[evName] = code;
+        }
+      });
+    });
+
+    const asYearNumber = (raw: string): number => {
+      const match = String(raw || '').toUpperCase().match(/AS\s*(\d+)/);
+      if (!match) return 0;
+      return Number(match[1] || 0) || 0;
+    };
+
+    const isPocThirdHour = (ev: EventDef): boolean => {
+      if (ev.expectedGroup.includes('poc')) return true;
+      if (ev.eventType.includes('third hour')) return true;
+      return ev.name.toLowerCase().includes('poc third hour');
+    };
+
+    // Auto-fill N/A for GMC cadets for POC Third Hour events (AS < 300) when no log entry exists.
+    events.forEach((ev) => {
+      if (!isPocThirdHour(ev)) return;
+      rows.forEach((row: any) => {
+        const asNum = asYearNumber(String(row['as_year'] || ''));
+        if (asNum >= 300) return;
+        if (row[ev.name] === '' || row[ev.name] === null || row[ev.name] === undefined) {
+          row[ev.name] = 'N/A';
         }
       });
     });
