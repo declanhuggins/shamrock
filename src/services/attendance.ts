@@ -60,7 +60,7 @@ namespace AttendanceService {
     const backendId = Config.getBackendId();
     const sheet = SheetUtils.getSheet(backendId, 'Directory Backend');
     if (!sheet) return [];
-    return SheetUtils.readTable(sheet).rows;
+    return SheetUtils.readTable(sheet).rows.filter((row) => DirectoryService.isOperationallyActiveCadet(row));
   }
 
   function readEvents(): EventDef[] {

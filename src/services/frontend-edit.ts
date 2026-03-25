@@ -195,10 +195,12 @@ namespace FrontendEditService {
       source: 'onFrontendEdit',
     });
 
-    // Propagate: sync frontend, rebuild attendance matrix (frontend + backend), refresh attendance form roster.
+    const rebuildAttendanceMatrix = DirectoryService.shouldRebuildAttendanceMatrixForField(allowedField);
+    const rebuildAttendanceForm = DirectoryService.shouldRebuildAttendanceFormForField(allowedField);
+
+    // Propagate directory-derived artifacts after backend update.
     Log.info(`[Directory] ${targetKey} ${allowedField} updated: \"${oldValue}\" -> \"${newValue}\"`);
-    SyncService.syncByBackendSheetName('Directory');
-    AttendanceService.rebuildMatrix();
+    SetupService.refreshDirectoryArtifacts({ rebuildAttendanceMatrix, rebuildAttendanceForm });
   }
 
   function applyLeadershipEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {

@@ -1547,6 +1547,7 @@ namespace SetupService {
     name: string,
     propertyKey: string,
     destinationSpreadsheetId?: string,
+    opts?: { syncQuestions?: boolean },
   ): Types.EnsureFormResult {
     Log.info(`Ensuring form kind=${kind}`);
     const props = Config.scriptProperties();
@@ -1575,6 +1576,19 @@ namespace SetupService {
       if (form.getTitle() !== name) form.setTitle(name);
     } catch (err) {
       Log.warn(`Unable to set form title. Error: ${err}`);
+    }
+
+    try {
+      if (kind === 'excusals') {
+        form.setDescription(
+          [
+            'If you do not use the same email as the one in the directory (your school email) your excusal will not automatically be tracked.',
+            'Please ensure you have properly selected an event and use the right email.',
+          ].join('\n'),
+        );
+      }
+    } catch (err) {
+      Log.warn(`Unable to set form description. Error: ${err}`);
     }
 
     // Enforce responder email collection and login requirement (verified identity).
@@ -1643,10 +1657,12 @@ namespace SetupService {
       }
     }
 
-    // Seed questions if empty.
-    if (kind === 'attendance') FormService.ensureAttendanceForm(form);
-    if (kind === 'excusals') FormService.ensureExcusalsForm(form);
-    if (kind === 'directory') FormService.ensureDirectoryForm(form);
+    // Seed/refresh questions unless the caller is about to do a dedicated rebuild.
+    if (opts?.syncQuestions !== false) {
+      if (kind === 'attendance') FormService.ensureAttendanceForm(form);
+      if (kind === 'excusals') FormService.ensureExcusalsForm(form);
+      if (kind === 'directory') FormService.ensureDirectoryForm(form);
+    }
 
     // Ensure the real response sheet exists and is named correctly (avoid dummy placeholders).
     if (destinationSpreadsheetId) {
@@ -1813,6 +1829,12 @@ namespace SetupService {
     DirectoryService.syncDirectoryFrontend();
   }
 
+  export function refreshDirectoryArtifacts(opts?: { rebuildAttendanceMatrix?: boolean; rebuildAttendanceForm?: boolean }) {
+    syncDirectoryFrontend();
+    if (opts?.rebuildAttendanceMatrix) rebuildAttendanceMatrix();
+    if (opts?.rebuildAttendanceForm) rebuildAttendanceForm();
+  }
+
   export function rebuildAttendanceMatrix() {
     AttendanceService.rebuildMatrix();
     try {
@@ -1844,7 +1866,13 @@ namespace SetupService {
 
   export function rebuildAttendanceForm() {
     const backendId = Config.getBackendId();
-    const ensured = ensureForm('attendance', Config.RESOURCE_NAMES.ATTENDANCE_FORM, Config.PROPERTY_KEYS.ATTENDANCE_FORM_ID, backendId);
+    const ensured = ensureForm(
+      'attendance',
+      Config.RESOURCE_NAMES.ATTENDANCE_FORM,
+      Config.PROPERTY_KEYS.ATTENDANCE_FORM_ID,
+      backendId,
+      { syncQuestions: false },
+    );
     const form = FormApp.openById(ensured.id);
     FormService.rebuildAttendanceForm(form);
     // After rebuilding questions, refresh event list and clean up response artifacts.

@@ -323,7 +323,7 @@ namespace FormHandlers {
 		const submittedAt = formatTimestamp(e.response?.getTimestamp?.() || new Date());
 
 		// Parse form responses using item responses for robustness
-		let events: string[] = [];
+		const events: string[] = [];
 		let lastName = '';
 		let firstName = '';
 		let reason = '';
@@ -334,18 +334,26 @@ namespace FormHandlers {
 			const title = itemResponse.getItem().getTitle();
 			const response = itemResponse.getResponse();
 			
-			// Match any "Select Event(s)" variant (Mando, LLAB, POC Third Hour, Secondary, Other)
-			if (title === 'Event' || title.toLowerCase().includes('select event')) {
-				if (Array.isArray(response)) {
-					events = response.map((e) => String(e || '').trim()).filter(Boolean);
-				} else {
-					const eventRaw = String(response || '').trim();
-					events = eventRaw
-						.split(',')
-						.map((ev) => ev.trim())
-						.filter(Boolean);
-				}
-			} else if (title === 'Last Name') {
+				// Match any "Select Event(s)" variant (Mando, LLAB, POC Third Hour, Secondary, Other)
+				if (title === 'Event' || title.toLowerCase().includes('select event')) {
+					if (Array.isArray(response)) {
+						response
+							.map((e) => String(e || '').trim())
+							.filter(Boolean)
+							.forEach((eventName) => {
+								if (!events.includes(eventName) && eventName !== '(no events)') events.push(eventName);
+							});
+					} else {
+						const eventRaw = String(response || '').trim();
+						eventRaw
+							.split(',')
+							.map((ev) => ev.trim())
+							.filter(Boolean)
+							.forEach((eventName) => {
+								if (!events.includes(eventName) && eventName !== '(no events)') events.push(eventName);
+							});
+					}
+				} else if (title === 'Last Name') {
 				lastName = String(response || '').trim();
 			} else if (title === 'First Name') {
 				firstName = String(response || '').trim();

@@ -667,6 +667,9 @@ function onBackendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
     const sheet = e?.range?.getSheet();
     if (!sheet) return;
     const sheetName = sheet.getName();
+    const col = e?.range?.getColumn() || 0;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map((h) => String(h || '').trim());
+    const header = headers[col - 1] || '';
 
     // Handle Excusals Backend edits (decision workflow) early and return
     if (sheetName === 'Excusals Backend') {
@@ -685,9 +688,6 @@ function onBackendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
       const backendId = Config.getBackendId();
       if (backendId) {
         const row = e?.range?.getRow() || 0;
-        const col = e?.range?.getColumn() || 0;
-        const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map((h) => String(h || '').trim());
-        const header = headers[col - 1] || '';
         const rowValues = sheet.getRange(row, 1, 1, headers.length).getValues()[0];
         const normalize = (v: any) => String(v || '').toLowerCase();
         let targetKey = `${sheetName}!R${row}C${col}`;
@@ -723,7 +723,10 @@ function onBackendEdit(e: GoogleAppsScript.Events.SheetsOnEdit) {
     }
 
     if (sheetName === 'Directory Backend') {
-      SetupService.syncDirectoryFrontend();
+      SetupService.refreshDirectoryArtifacts({
+        rebuildAttendanceMatrix: DirectoryService.shouldRebuildAttendanceMatrixForField(header),
+        rebuildAttendanceForm: DirectoryService.shouldRebuildAttendanceFormForField(header),
+      });
       return;
     }
 
